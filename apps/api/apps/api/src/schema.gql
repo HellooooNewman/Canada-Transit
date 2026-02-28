@@ -1,0 +1,26 @@
+# ------------------------------------------------------
+# THIS FILE WAS AUTOMATICALLY GENERATED (DO NOT MODIFY)
+# ------------------------------------------------------
+
+type Query {
+  agencies(limit: Int = 300): [JSON!]!
+  gtfsRoutes(agencyId: String!, feedVersionId: String, routeType: Int, limit: Int = 1000): [JSON!]!
+  gtfsStops(agencyId: String!, feedVersionId: String, bbox: String, limit: Int = 2000): [JSON!]!
+  gtfsTrips(agencyId: String!, feedVersionId: String, routeId: String, serviceId: String, limit: Int = 2000): [JSON!]!
+  gtfsStopTimes(agencyId: String!, tripId: String!, feedVersionId: String, limit: Int = 5000): [JSON!]!
+  gtfsShapes(agencyId: String!, feedVersionId: String, routeId: String, bbox: String, limit: Int = 10000): [JSON!]!
+  gtfsTableRows(agencyId: String!, tableName: String!, feedVersionId: String, limit: Int = 200, offset: Int = 0): [JSON!]!
+  mapDiscovery(bbox: String!, zoom: Int = 11, routeLimit: Int = 4000, stopLimit: Int = 3000): JSON!
+  mapStops(bbox: String!, zoom: Int = 11, stopLimit: Int = 3000): JSON!
+  mapRouteLines(bbox: String!, zoom: Int = 10, routeLimit: Int = 1200, shapeLimit: Int = 300): JSON!
+  mapRouteDetails(feedVersionId: String!, routeId: String!): JSON!
+  mapStopDetails(feedVersionId: String!, stopId: String!): JSON!
+  mapRouteRealtime(feedVersionId: String!, routeId: String!, agencySlug: String): JSON!
+  agencyRealtimeHealth(slug: String!): JSON!
+  mapStopRealtime(feedVersionId: String!, stopId: String!, agencySlug: String): JSON!
+}
+
+"""
+The `JSON` scalar type represents JSON values as specified by [ECMA-404](http://www.ecma-international.org/publications/files/ECMA-ST/ECMA-404.pdf).
+"""
+scalar JSON

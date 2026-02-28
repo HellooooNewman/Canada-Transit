@@ -1,0 +1,506 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum DataProvenance {
+  OFFICIAL
+  DERIVED
+  ESTIMATED
+}
+
+enum LifecycleStatus {
+  EXISTING
+  UNDER_CONSTRUCTION
+  PLANNED
+  CANCELLED
+  DECOMMISSIONED
+}
+
+model Agency {
+  id            String           @id @default(cuid())
+  slug          String           @unique
+  displayName   String
+  countryCode   String           @default("CA")
+  subdivisionCode String?
+  timezone      String?
+  defaultLang   String?
+  website       String?
+  source        DataProvenance
+  status        LifecycleStatus
+  effectiveFrom DateTime
+  effectiveTo   DateTime?
+  raw           Json?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  feedSources   GtfsFeedSource[]
+  feedVersions  GtfsFeedVersion[]
+
+  @@index([displayName])
+}
+
+model GtfsFeedSource {
+  id             String           @id @default(cuid())
+  agencyId       String
+  sourceKey      String
+  sourceType     String
+  basePath       String
+  zipPath        String?
+  extractedPath  String?
+  enabled        Boolean          @default(true)
+  source         DataProvenance
+  status         LifecycleStatus
+  effectiveFrom  DateTime
+  effectiveTo    DateTime?
+  raw            Json?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  agency         Agency           @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  importRuns     GtfsImportRun[]
+  feedVersions   GtfsFeedVersion[]
+
+  @@unique([agencyId, sourceKey])
+  @@index([agencyId, enabled])
+}
+
+model GtfsImportRun {
+  id            String           @id @default(cuid())
+  feedSourceId  String
+  status        String
+  startedAt     DateTime
+  finishedAt    DateTime?
+  rowsRead      Int              @default(0)
+  rowsInserted  Int              @default(0)
+  rowsRejected  Int              @default(0)
+  warningCount  Int              @default(0)
+  errorMessage  String?
+  stats         Json?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  feedSource    GtfsFeedSource   @relation(fields: [feedSourceId], references: [id], onDelete: Cascade)
+  feedVersions  GtfsFeedVersion[]
+
+  @@index([feedSourceId, startedAt])
+}
+
+model GtfsFeedVersion {
+  id             String            @id @default(cuid())
+  agencyId       String
+  feedSourceId   String
+  importRunId    String
+  versionHash    String
+  isActive       Boolean           @default(true)
+  importedAt     DateTime          @default(now())
+  source         DataProvenance
+  status         LifecycleStatus
+  effectiveFrom  DateTime
+  effectiveTo    DateTime?
+  raw            Json?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  agency         Agency            @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  feedSource     GtfsFeedSource    @relation(fields: [feedSourceId], references: [id], onDelete: Cascade)
+  importRun      GtfsImportRun     @relation(fields: [importRunId], references: [id], onDelete: Cascade)
+  feedInfo       GtfsFeedInfo?
+  agencies       GtfsAgency[]
+  calendars      GtfsCalendar[]
+  calendarDates  GtfsCalendarDate[]
+  routes         GtfsRoute[]
+  stops          GtfsStop[]
+  trips          GtfsTrip[]
+  stopTimes      GtfsStopTime[]
+  shapePoints    GtfsShapePoint[]
+  fareAttributes GtfsFareAttribute[]
+  fareRules      GtfsFareRule[]
+  frequencies    GtfsFrequency[]
+  transfers      GtfsTransfer[]
+  levels         GtfsLevel[]
+  pathways       GtfsPathway[]
+  rawTableRows   GtfsRawTableRow[]
+
+  @@unique([agencyId, versionHash])
+  @@index([agencyId, isActive])
+}
+
+model GtfsFeedInfo {
+  id                  String            @id @default(cuid())
+  feedVersionId       String            @unique
+  feedPublisherName   String?
+  feedPublisherUrl    String?
+  feedLang            String?
+  defaultLang         String?
+  feedStartDate       String?
+  feedEndDate         String?
+  feedVersion         String?
+  source              DataProvenance
+  status              LifecycleStatus
+  effectiveFrom       DateTime
+  effectiveTo         DateTime?
+  raw                 Json?
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+  feedVersionRecord   GtfsFeedVersion   @relation(fields: [feedVersionId], references: [id], onDelete: Cascade)
+}
+
+model GtfsAgency {
+  id              String            @id @default(cuid())
+  feedVersionId   String
+  agencyId        String?
+  agencyName      String
+  agencyUrl       String
+  agencyTimezone  String
+  agencyLang      String?
+  agencyPhone     String?
+  agencyFareUrl   String?
+  source          DataProvenance
+  status          LifecycleStatus
+  effectiveFrom   DateTime
+  effectiveTo     DateTime?
+  raw             Json?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  feedVersion     GtfsFeedVersion   @relation(fields: [feedVersionId], references: [id], onDelete: Cascade)
+
+  @@unique([feedVersionId, agencyName, agencyId])
+  @@index([feedVersionId, agencyName])
+}
+
+model GtfsCalendar {
+  id             String            @id @default(cuid())
+  feedVersionId  String
+  serviceId      String
+  monday         Boolean
+  tuesday        Boolean
+  wednesday      Boolean
+  thursday       Boolean
+  friday         Boolean
+  saturday       Boolean
+  sunday         Boolean
+  startDate      String
+  endDate        String
+  source         DataProvenance
+  status         LifecycleStatus
+  effectiveFrom  DateTime
+  effectiveTo    DateTime?
+  raw            Json?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  feedVersion    GtfsFeedVersion   @relation(fields: [feedVersionId], references: [id], onDelete: Cascade)
+  trips          GtfsTrip[]
+
+  @@unique([feedVersionId, serviceId])
+  @@index([feedVersionId, startDate, endDate])
+}
+
+model GtfsCalendarDate {
+  id             String            @id @default(cuid())
+  feedVersionId  String
+  serviceId      String
+  date           String
+  exceptionType  Int
+  source         DataProvenance
+  status         LifecycleStatus
+  effectiveFrom  DateTime
+  effectiveTo    DateTime?
+  raw            Json?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  feedVersion    GtfsFeedVersion   @relation(fields: [feedVersionId], references: [id], onDelete: Cascade)
+
+  @@unique([feedVersionId, serviceId, date])
+  @@index([feedVersionId, date])
+}
+
+model GtfsRoute {
+  id             String            @id @default(cuid())
+  feedVersionId  String
+  routeId        String
+  agencyId       String?
+  routeShortName String?
+  routeLongName  String?
+  routeDesc      String?
+  routeType      Int
+  routeUrl       String?
+  routeColor     String?
+  routeTextColor String?
+  source         DataProvenance
+  status         LifecycleStatus
+  effectiveFrom  DateTime
+  effectiveTo    DateTime?
+  raw            Json?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  feedVersion    GtfsFeedVersion   @relation(fields: [feedVersionId], references: [id], onDelete: Cascade)
+  trips          GtfsTrip[]
+
+  @@unique([feedVersionId, routeId])
+  @@index([feedVersionId, routeType, routeShortName])
+  @@index([feedVersionId, agencyId])
+}
+
+model GtfsStop {
+  id                 String            @id @default(cuid())
+  feedVersionId      String
+  stopId             String
+  stopCode           String?
+  stopName           String
+  stopDesc           String?
+  stopLat            Float?
+  stopLon            Float?
+  zoneId             String?
+  stopUrl            String?
+  locationType       Int?
+  parentStation      String?
+  wheelchairBoarding Int?
+  platformCode       String?
+  source             DataProvenance
+  status             LifecycleStatus
+  effectiveFrom      DateTime
+  effectiveTo        DateTime?
+  raw                Json?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+  feedVersion        GtfsFeedVersion   @relation(fields: [feedVersionId], references: [id], onDelete: Cascade)
+  stopTimes          GtfsStopTime[]
+
+  @@unique([feedVersionId, stopId])
+  @@index([feedVersionId, parentStation])
+  @@index([feedVersionId, stopName])
+  @@index([feedVersionId, stopLat, stopLon])
+}
+
+model GtfsTrip {
+  id                   String            @id @default(cuid())
+  feedVersionId        String
+  tripId               String
+  routeId              String
+  serviceId            String?
+  tripHeadsign         String?
+  tripShortName        String?
+  directionId          Int?
+  blockId              String?
+  shapeId              String?
+  wheelchairAccessible Int?
+  bikesAllowed         Int?
+  source               DataProvenance
+  status               LifecycleStatus
+  effectiveFrom        DateTime
+  effectiveTo          DateTime?
+  raw                  Json?
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+  feedVersion          GtfsFeedVersion   @relation(fields: [feedVersionId], references: [id], onDelete: Cascade)
+  route                GtfsRoute         @relation(fields: [feedVersionId, routeId], references: [feedVersionId, routeId], onDelete: Cascade)
+  calendar             GtfsCalendar?     @relation(fields: [feedVersionId, serviceId], references: [feedVersionId, serviceId], onDelete: SetNull)
+  stopTimes            GtfsStopTime[]
+
+  @@unique([feedVersionId, tripId])
+  @@index([feedVersionId, routeId, directionId])
+  @@index([feedVersionId, serviceId])
+  @@index([feedVersionId, shapeId])
+}
+
+model GtfsStopTime {
+  id                String            @id @default(cuid())
+  feedVersionId     String
+  tripId            String
+  arrivalTime       String?
+  departureTime     String?
+  stopId            String
+  stopSequence      Int
+  stopHeadsign      String?
+  pickupType        Int?
+  dropOffType       Int?
+  shapeDistTraveled Float?
+  timepoint         Int?
+  source            DataProvenance
+  status            LifecycleStatus
+  effectiveFrom     DateTime
+  effectiveTo       DateTime?
+  raw               Json?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  feedVersion       GtfsFeedVersion   @relation(fields: [feedVersionId], references: [id], onDelete: Cascade)
+  trip              GtfsTrip          @relation(fields: [feedVersionId, tripId], references: [feedVersionId, tripId], onDelete: Cascade)
+  stop              GtfsStop          @relation(fields: [feedVersionId, stopId], references: [feedVersionId, stopId], onDelete: Cascade)
+
+  @@unique([feedVersionId, tripId, stopSequence])
+  @@index([feedVersionId, stopId, arrivalTime])
+  @@index([feedVersionId, tripId, stopSequence])
+}
+
+model GtfsShapePoint {
+  id                String            @id @default(cuid())
+  feedVersionId     String
+  shapeId           String
+  shapePtLat        Float
+  shapePtLon        Float
+  shapePtSequence   Int
+  shapeDistTraveled Float?
+  source            DataProvenance
+  status            LifecycleStatus
+  effectiveFrom     DateTime
+  effectiveTo       DateTime?
+  raw               Json?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  feedVersion       GtfsFeedVersion   @relation(fields: [feedVersionId], references: [id], onDelete: Cascade)
+
+  @@unique([feedVersionId, shapeId, shapePtSequence])
+  @@index([feedVersionId, shapeId, shapePtSequence])
+}
+
+model GtfsFareAttribute {
+  id                 String            @id @default(cuid())
+  feedVersionId      String
+  fareId             String
+  price              Float?
+  currencyType       String?
+  paymentMethod      Int?
+  transfers          Int?
+  agencyId           String?
+  transferDuration   Int?
+  source             DataProvenance
+  status             LifecycleStatus
+  effectiveFrom      DateTime
+  effectiveTo        DateTime?
+  raw                Json?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+  feedVersion        GtfsFeedVersion   @relation(fields: [feedVersionId], references: [id], onDelete: Cascade)
+
+  @@unique([feedVersionId, fareId])
+  @@index([feedVersionId, agencyId])
+}
+
+model GtfsFareRule {
+  id                 String            @id @default(cuid())
+  feedVersionId      String
+  fareId             String
+  routeId            String?
+  originId           String?
+  destinationId      String?
+  containsId         String?
+  source             DataProvenance
+  status             LifecycleStatus
+  effectiveFrom      DateTime
+  effectiveTo        DateTime?
+  raw                Json?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+  feedVersion        GtfsFeedVersion   @relation(fields: [feedVersionId], references: [id], onDelete: Cascade)
+
+  @@index([feedVersionId, fareId])
+  @@index([feedVersionId, routeId])
+}
+
+model GtfsFrequency {
+  id                 String            @id @default(cuid())
+  feedVersionId      String
+  tripId             String
+  startTime          String?
+  endTime            String?
+  headwaySecs        Int?
+  exactTimes         Int?
+  source             DataProvenance
+  status             LifecycleStatus
+  effectiveFrom      DateTime
+  effectiveTo        DateTime?
+  raw                Json?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+  feedVersion        GtfsFeedVersion   @relation(fields: [feedVersionId], references: [id], onDelete: Cascade)
+
+  @@index([feedVersionId, tripId])
+}
+
+model GtfsTransfer {
+  id                 String            @id @default(cuid())
+  feedVersionId      String
+  fromStopId         String
+  toStopId           String
+  transferType       Int?
+  minTransferTime    Int?
+  fromRouteId        String?
+  toRouteId          String?
+  fromTripId         String?
+  toTripId           String?
+  source             DataProvenance
+  status             LifecycleStatus
+  effectiveFrom      DateTime
+  effectiveTo        DateTime?
+  raw                Json?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+  feedVersion        GtfsFeedVersion   @relation(fields: [feedVersionId], references: [id], onDelete: Cascade)
+
+  @@index([feedVersionId, fromStopId, toStopId])
+}
+
+model GtfsLevel {
+  id                 String            @id @default(cuid())
+  feedVersionId      String
+  levelId            String
+  levelIndex         Float?
+  levelName          String?
+  source             DataProvenance
+  status             LifecycleStatus
+  effectiveFrom      DateTime
+  effectiveTo        DateTime?
+  raw                Json?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+  feedVersion        GtfsFeedVersion   @relation(fields: [feedVersionId], references: [id], onDelete: Cascade)
+
+  @@unique([feedVersionId, levelId])
+}
+
+model GtfsPathway {
+  id                    String            @id @default(cuid())
+  feedVersionId         String
+  pathwayId             String
+  fromStopId            String?
+  toStopId              String?
+  pathwayMode           Int?
+  isBidirectional       Int?
+  length                Float?
+  traversalTime         Int?
+  stairCount            Int?
+  maxSlope              Float?
+  minWidth              Float?
+  signpostedAs          String?
+  reversedSignpostedAs  String?
+  source                DataProvenance
+  status                LifecycleStatus
+  effectiveFrom         DateTime
+  effectiveTo           DateTime?
+  raw                   Json?
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+  feedVersion           GtfsFeedVersion   @relation(fields: [feedVersionId], references: [id], onDelete: Cascade)
+
+  @@unique([feedVersionId, pathwayId])
+  @@index([feedVersionId, fromStopId, toStopId])
+}
+
+model GtfsRawTableRow {
+  id                 String            @id @default(cuid())
+  feedVersionId      String
+  tableName          String
+  rowIndex           Int
+  rowData            Json
+  source             DataProvenance
+  status             LifecycleStatus
+  effectiveFrom      DateTime
+  effectiveTo        DateTime?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+  feedVersion        GtfsFeedVersion   @relation(fields: [feedVersionId], references: [id], onDelete: Cascade)
+
+  @@unique([feedVersionId, tableName, rowIndex])
+  @@index([feedVersionId, tableName])
+}

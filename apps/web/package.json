@@ -1,0 +1,26 @@
+{
+  "name": "@ttc/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev --host 0.0.0.0 --port 5173",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0 --port 4173",
+    "lint": "echo 'No linter configured for web'",
+    "format": "echo 'No formatter configured for web'"
+  },
+  "devDependencies": {
+    "@sveltejs/adapter-node": "^5.3.2",
+    "@sveltejs/kit": "^2.39.5",
+    "@types/node": "^22.10.2",
+    "svelte": "^5.38.7",
+    "svelte-check": "^4.1.1",
+    "typescript": "^5.7.2",
+    "vite": "^6.3.6"
+  },
+  "dependencies": {
+    "chart.js": "^4.5.1",
+    "leaflet": "^1.9.4"
+  }
+}

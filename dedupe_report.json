@@ -1,0 +1,725 @@
+[
+  {
+    "shared_realtime": {
+      "service_alerts": null,
+      "trip_updates": null,
+      "vehicle_positions": null
+    },
+    "members": [
+      "aquabus",
+      "bc_ferries",
+      "belleville_transit",
+      "bili",
+      "brampton_transit",
+      "brandon_transit",
+      "codiac_transpo",
+      "cornwall_transit",
+      "denman_island_bus_service",
+      "exo_le_richelain_roussillon",
+      "fredericton_transit",
+      "gabriola_community_shuttle",
+      "go_transit",
+      "gova_transit",
+      "grande_prairie_transit",
+      "guelph_transit",
+      "hamilton_street_railway",
+      "hinton_transit",
+      "hornby_island_bus",
+      "lethbridge_transit",
+      "lindsay_transit",
+      "medicine_hat_transit",
+      "metrobus_transit",
+      "middlesex_county_connect",
+      "midland_transit",
+      "milton_transit",
+      "miramichi_transit",
+      "moose_jaw_transit",
+      "mrc_haut_saint-laurent",
+      "north_bay_transit",
+      "oakville_transit",
+      "ontario_northland",
+      "orangeville_transit",
+      "orillia_transit",
+      "pc_connect",
+      "prince_albert_transit",
+      "quinte_transit",
+      "red_deer_transit",
+      "regina_transit",
+      "reseau_express_metropolitain",
+      "reseau_transport_capitale",
+      "reseau_transport_longueuil",
+      "ride_ck",
+      "ride_norfolk",
+      "roam_transit",
+      "saint_john_transit",
+      "sarnia_transit",
+      "sault_ste_marie_transit",
+      "simcoe_county_linx",
+      "societe_de_transport_de_trois_rivieres",
+      "societe_transport_laval",
+      "societe_transport_levis",
+      "societe_transport_montreal",
+      "societe_transport_outaouais",
+      "societe_transport_rimouski",
+      "societe_transport_shawinigan",
+      "st_thomas_transit",
+      "stratford_transit",
+      "t3_transit",
+      "temiskaming_transit",
+      "timmins_transit",
+      "transit_windsor",
+      "union_pearson_express",
+      "via_rail",
+      "ville_de_drummondville",
+      "ville_de_rouyn_noranda",
+      "west_coast_trail_express",
+      "whitehorse_transit",
+      "winnipeg_transit",
+      "yellowknife_transit"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "http://www.myridebarrie.ca/gtfs/GTFS_ServiceAlerts.pb",
+      "trip_updates": "http://www.myridebarrie.ca/gtfs/GTFS_TripUpdates.pb",
+      "vehicle_positions": "http://www.myridebarrie.ca/gtfs/GTFS_VehiclePositions.pb"
+    },
+    "members": [
+      "barrie_transit"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://bct.tmix.se/gtfs-realtime/alerts.pb?operatorIds=34",
+      "trip_updates": "https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=34",
+      "vehicle_positions": "https://bct.tmix.se/gtfs-realtime/vehicleupdates.pb?operatorIds=34"
+    },
+    "members": [
+      "bc_transit_100_mile_house"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://bct.tmix.se/gtfs-realtime/alerts.pb?operatorIds=38",
+      "trip_updates": "https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=38",
+      "vehicle_positions": "https://bct.tmix.se/gtfs-realtime/vehicleupdates.pb?operatorIds=38"
+    },
+    "members": [
+      "bc_transit_ashcroft_cache_creek_clinton"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://bct.tmix.se/gtfs-realtime/alerts.pb?operatorIds=12",
+      "trip_updates": "https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=12",
+      "vehicle_positions": "https://bct.tmix.se/gtfs-realtime/vehicleupdates.pb?operatorIds=12"
+    },
+    "members": [
+      "bc_transit_campbell_river"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://bct.tmix.se/gtfs-realtime/alerts.pb?operatorIds=35",
+      "trip_updates": "https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=35",
+      "vehicle_positions": "https://bct.tmix.se/gtfs-realtime/vehicleupdates.pb?operatorIds=35"
+    },
+    "members": [
+      "bc_transit_clearwater"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://bct.tmix.se/gtfs-realtime/alerts.pb?operatorIds=45",
+      "trip_updates": "https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=45",
+      "vehicle_positions": "https://bct.tmix.se/gtfs-realtime/vehicleupdates.pb?operatorIds=45"
+    },
+    "members": [
+      "bc_transit_comox_valley"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://bct.tmix.se/gtfs-realtime/alerts.pb?operatorIds=10",
+      "trip_updates": "https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=10",
+      "vehicle_positions": "https://bct.tmix.se/gtfs-realtime/vehicleupdates.pb?operatorIds=10"
+    },
+    "members": [
+      "bc_transit_cowichan_valley"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://bct.tmix.se/gtfs-realtime/alerts.pb?operatorIds=16",
+      "trip_updates": "https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=16",
+      "vehicle_positions": "https://bct.tmix.se/gtfs-realtime/vehicleupdates.pb?operatorIds=16"
+    },
+    "members": [
+      "bc_transit_creston"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://bct.tmix.se/gtfs-realtime/alerts.pb?operatorIds=27",
+      "trip_updates": "https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=27",
+      "vehicle_positions": "https://bct.tmix.se/gtfs-realtime/vehicleupdates.pb?operatorIds=27"
+    },
+    "members": [
+      "bc_transit_dawson_creek"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://bct.tmix.se/gtfs-realtime/alerts.pb?operatorIds=21",
+      "trip_updates": "https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=21",
+      "vehicle_positions": "https://bct.tmix.se/gtfs-realtime/vehicleupdates.pb?operatorIds=21"
+    },
+    "members": [
+      "bc_transit_east_kootenay"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://bct.tmix.se/gtfs-realtime/alerts.pb?operatorIds=28",
+      "trip_updates": "https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=28",
+      "vehicle_positions": "https://bct.tmix.se/gtfs-realtime/vehicleupdates.pb?operatorIds=28"
+    },
+    "members": [
+      "bc_transit_fort_st_john"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://bct.tmix.se/gtfs-realtime/alerts.pb?operatorIds=13",
+      "trip_updates": "https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=13",
+      "vehicle_positions": "https://bct.tmix.se/gtfs-realtime/vehicleupdates.pb?operatorIds=13"
+    },
+    "members": [
+      "bc_transit_fraser_valley_region",
+      "bc_transit_kelowna",
+      "bc_transit_powell_river"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://bct.tmix.se/gtfs-realtime/alerts.pb?operatorIds=26",
+      "trip_updates": "https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=26",
+      "vehicle_positions": "https://bct.tmix.se/gtfs-realtime/vehicleupdates.pb?operatorIds=26"
+    },
+    "members": [
+      "bc_transit_hazelton"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://bct.tmix.se/gtfs-realtime/alerts.pb?operatorIds=46",
+      "trip_updates": "https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=46",
+      "vehicle_positions": "https://bct.tmix.se/gtfs-realtime/vehicleupdates.pb?operatorIds=46"
+    },
+    "members": [
+      "bc_transit_kamloops"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://bct.tmix.se/gtfs-realtime/alerts.pb?operatorIds=37",
+      "trip_updates": "https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=37",
+      "vehicle_positions": "https://bct.tmix.se/gtfs-realtime/vehicleupdates.pb?operatorIds=37"
+    },
+    "members": [
+      "bc_transit_merritt"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://bct.tmix.se/gtfs-realtime/alerts.pb?operatorIds=17",
+      "trip_updates": "https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=17",
+      "vehicle_positions": "https://bct.tmix.se/gtfs-realtime/vehicleupdates.pb?operatorIds=17"
+    },
+    "members": [
+      "bc_transit_mt_waddington"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://bct.tmix.se/gtfs-realtime/alerts.pb?operatorIds=41",
+      "trip_updates": "https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=41",
+      "vehicle_positions": "https://bct.tmix.se/gtfs-realtime/vehicleupdates.pb?operatorIds=41"
+    },
+    "members": [
+      "bc_transit_nanaimo"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://bct.tmix.se/gtfs-realtime/alerts.pb?operatorIds=14",
+      "trip_updates": "https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=14",
+      "vehicle_positions": "https://bct.tmix.se/gtfs-realtime/vehicleupdates.pb?operatorIds=14"
+    },
+    "members": [
+      "bc_transit_north_okanagan"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://bct.tmix.se/gtfs-realtime/alerts.pb?operatorIds=50",
+      "trip_updates": "https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=50",
+      "vehicle_positions": "https://bct.tmix.se/gtfs-realtime/vehicleupdates.pb?operatorIds=50"
+    },
+    "members": [
+      "bc_transit_pemberton_valley"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://bct.tmix.se/gtfs-realtime/alerts.pb?operatorIds=11",
+      "trip_updates": "https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=11",
+      "vehicle_positions": "https://bct.tmix.se/gtfs-realtime/vehicleupdates.pb?operatorIds=11"
+    },
+    "members": [
+      "bc_transit_port_alberni"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://bct.tmix.se/gtfs-realtime/alerts.pb?operatorIds=22",
+      "trip_updates": "https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=22",
+      "vehicle_positions": "https://bct.tmix.se/gtfs-realtime/vehicleupdates.pb?operatorIds=22"
+    },
+    "members": [
+      "bc_transit_prince_george"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://bct.tmix.se/gtfs-realtime/alerts.pb?operatorIds=23",
+      "trip_updates": "https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=23",
+      "vehicle_positions": "https://bct.tmix.se/gtfs-realtime/vehicleupdates.pb?operatorIds=23"
+    },
+    "members": [
+      "bc_transit_prince_rupert"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://bct.tmix.se/gtfs-realtime/alerts.pb?operatorIds=32",
+      "trip_updates": "https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=32",
+      "vehicle_positions": "https://bct.tmix.se/gtfs-realtime/vehicleupdates.pb?operatorIds=32"
+    },
+    "members": [
+      "bc_transit_quesnel"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://bct.tmix.se/gtfs-realtime/alerts.pb?operatorIds=36",
+      "trip_updates": "https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=36",
+      "vehicle_positions": "https://bct.tmix.se/gtfs-realtime/vehicleupdates.pb?operatorIds=36"
+    },
+    "members": [
+      "bc_transit_revelstoke"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://bct.tmix.se/gtfs-realtime/alerts.pb?operatorIds=39",
+      "trip_updates": "https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=39",
+      "vehicle_positions": "https://bct.tmix.se/gtfs-realtime/vehicleupdates.pb?operatorIds=39"
+    },
+    "members": [
+      "bc_transit_salt_spring_island"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://bct.tmix.se/gtfs-realtime/alerts.pb?operatorIds=31",
+      "trip_updates": "https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=31",
+      "vehicle_positions": "https://bct.tmix.se/gtfs-realtime/vehicleupdates.pb?operatorIds=31"
+    },
+    "members": [
+      "bc_transit_smithers"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://bct.tmix.se/gtfs-realtime/alerts.pb?operatorIds=15",
+      "trip_updates": "https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=15",
+      "vehicle_positions": "https://bct.tmix.se/gtfs-realtime/vehicleupdates.pb?operatorIds=15"
+    },
+    "members": [
+      "bc_transit_south_okanagan_similkameen"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://bct.tmix.se/gtfs-realtime/alerts.pb?operatorIds=43",
+      "trip_updates": "https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=43",
+      "vehicle_positions": "https://bct.tmix.se/gtfs-realtime/vehicleupdates.pb?operatorIds=43"
+    },
+    "members": [
+      "bc_transit_squamish"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://bct.tmix.se/gtfs-realtime/alerts.pb?operatorIds=18",
+      "trip_updates": "https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=18",
+      "vehicle_positions": "https://bct.tmix.se/gtfs-realtime/vehicleupdates.pb?operatorIds=18"
+    },
+    "members": [
+      "bc_transit_sunshine_coast"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://bct.tmix.se/gtfs-realtime/alerts.pb?operatorIds=48",
+      "trip_updates": "https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=48",
+      "vehicle_positions": "https://bct.tmix.se/gtfs-realtime/vehicleupdates.pb?operatorIds=48"
+    },
+    "members": [
+      "bc_transit_victoria"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://bct.tmix.se/gtfs-realtime/alerts.pb?operatorIds=20",
+      "trip_updates": "https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=20",
+      "vehicle_positions": "https://bct.tmix.se/gtfs-realtime/vehicleupdates.pb?operatorIds=20"
+    },
+    "members": [
+      "bc_transit_west_kootenay"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://bct.tmix.se/gtfs-realtime/alerts.pb?operatorIds=44",
+      "trip_updates": "https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=44",
+      "vehicle_positions": "https://bct.tmix.se/gtfs-realtime/vehicleupdates.pb?operatorIds=44"
+    },
+    "members": [
+      "bc_transit_whistler"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://bct.tmix.se/gtfs-realtime/alerts.pb?operatorIds=33",
+      "trip_updates": "https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=33",
+      "vehicle_positions": "https://bct.tmix.se/gtfs-realtime/vehicleupdates.pb?operatorIds=33"
+    },
+    "members": [
+      "bc_transit_williams_lake"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "http://opendata.burlington.ca/gtfs-rt/GTFS_ServiceAlerts.pb",
+      "trip_updates": "http://opendata.burlington.ca/gtfs-rt/GTFS_TripUpdates.pb",
+      "vehicle_positions": "http://opendata.burlington.ca/gtfs-rt/GTFS_VehiclePositions.pb"
+    },
+    "members": [
+      "burlington_transit"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "http://transitdata.calgary.ca/ctransit/alerts.pb",
+      "trip_updates": "http://transitdata.calgary.ca/ctransit/tripupdates.pb",
+      "vehicle_positions": "http://transitdata.calgary.ca/ctransit/vehiclepositions.pb"
+    },
+    "members": [
+      "calgary_transit"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://maps.durham.ca/OpenDataGTFS/alerts.pb",
+      "trip_updates": "https://drtonline.durhamregiontransit.com/gtfsrealtime/TripUpdates",
+      "vehicle_positions": "https://drtonline.durhamregiontransit.com/gtfsrealtime/VehiclePositions"
+    },
+    "members": [
+      "durham_region_transit"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "http://gtfs.edmonton.ca/TMGTFSRealTimeWebService/Alert/Alerts.pb",
+      "trip_updates": "http://gtfs.edmonton.ca/TMGTFSRealTimeWebService/TripUpdate/TripUpdates.pb",
+      "vehicle_positions": "http://gtfs.edmonton.ca/TMGTFSRealTimeWebService/Vehicle/VehiclePositions.pb"
+    },
+    "members": [
+      "edmonton_transit_service"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://exo.chrono-saeiv.com/api/opendata/v1/TRAINS/alert",
+      "trip_updates": "https://exo.chrono-saeiv.com/api/opendata/v1/TRAINS/tripupdate",
+      "vehicle_positions": "https://exo.chrono-saeiv.com/api/opendata/v1/TRAINS/vehicleposition"
+    },
+    "members": [
+      "exo"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://opendata.exo.quebec/ServiceGTFSR/Alert.pb?agency=CITCRC",
+      "trip_updates": "https://opendata.exo.quebec/ServiceGTFSR/TripUpdate.pb?agency=CITCRC",
+      "vehicle_positions": "https://opendata.exo.quebec/ServiceGTFSR/VehiclePosition.pb?agency=CITCRC"
+    },
+    "members": [
+      "exo_chambly_richelieu_carignan"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://opendata.exo.quebec/ServiceGTFSR/Alert.pb?agency=MRCLASSO",
+      "trip_updates": "https://opendata.exo.quebec/ServiceGTFSR/TripUpdate.pb?agency=MRCLASSO",
+      "vehicle_positions": "https://opendata.exo.quebec/ServiceGTFSR/VehiclePosition.pb?agency=MRCLASSO"
+    },
+    "members": [
+      "exo_l'assomption"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://exo.chrono-saeiv.com/api/opendata/v1/CITPI/alert",
+      "trip_updates": "https://exo.chrono-saeiv.com/api/opendata/v1/CITPI/tripupdate",
+      "vehicle_positions": "https://exo.chrono-saeiv.com/api/opendata/v1/CITPI/vehicleposition"
+    },
+    "members": [
+      "exo_la_presqu'ile"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://opendata.exo.quebec/ServiceGTFSR/Alert.pb?agency=CITLA",
+      "trip_updates": "https://opendata.exo.quebec/ServiceGTFSR/TripUpdate.pb?agency=CITLA",
+      "vehicle_positions": "https://opendata.exo.quebec/ServiceGTFSR/VehiclePosition.pb?agency=CITLA"
+    },
+    "members": [
+      "exo_laurentides"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://opendata.exo.quebec/ServiceGTFSR/Alert.pb?agency=CITVR",
+      "trip_updates": "https://opendata.exo.quebec/ServiceGTFSR/TripUpdate.pb?agency=CITVR",
+      "vehicle_positions": "https://opendata.exo.quebec/ServiceGTFSR/VehiclePosition.pb?agency=CITVR"
+    },
+    "members": [
+      "exo_richelieu"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://opendata.exo.quebec/ServiceGTFSR/Alert.pb?agency=OMITSJU",
+      "trip_updates": "https://opendata.exo.quebec/ServiceGTFSR/TripUpdate.pb?agency=OMITSJU",
+      "vehicle_positions": "https://opendata.exo.quebec/ServiceGTFSR/VehiclePosition.pb?agency=OMITSJU"
+    },
+    "members": [
+      "exo_sainte_julie"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://opendata.exo.quebec/ServiceGTFSR/Alert.pb?agency=CITSV",
+      "trip_updates": "https://opendata.exo.quebec/ServiceGTFSR/TripUpdate.pb?agency=CITSV",
+      "vehicle_positions": "https://opendata.exo.quebec/ServiceGTFSR/VehiclePosition.pb?agency=CITSV"
+    },
+    "members": [
+      "exo_sorel_varennes"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://opendata.exo.quebec/ServiceGTFSR/Alert.pb?agency=CITSO",
+      "trip_updates": "https://opendata.exo.quebec/ServiceGTFSR/TripUpdate.pb?agency=CITSO",
+      "vehicle_positions": "https://opendata.exo.quebec/ServiceGTFSR/VehiclePosition.pb?agency=CITSO"
+    },
+    "members": [
+      "exo_sud_ouest"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://opendata.exo.quebec/ServiceGTFSR/Alert.pb?agency=MRCLM",
+      "trip_updates": "https://opendata.exo.quebec/ServiceGTFSR/TripUpdate.pb?agency=MRCLM",
+      "vehicle_positions": "https://opendata.exo.quebec/ServiceGTFSR/VehiclePosition.pb?agency=MRCLM"
+    },
+    "members": [
+      "exo_terrebonne_mascouche"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": null,
+      "trip_updates": "http://webapps.regionofwaterloo.ca/api/grt-routes/api/tripupdates",
+      "vehicle_positions": "http://webapps.regionofwaterloo.ca/api/grt-routes/api/vehiclepositions"
+    },
+    "members": [
+      "grand_river_transport"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "http://gtfs.halifax.ca/realtime/Alert/Alerts.pb",
+      "trip_updates": "http://gtfs.halifax.ca/realtime/TripUpdate/TripUpdates.pb",
+      "vehicle_positions": "http://gtfs.halifax.ca/realtime/Vehicle/VehiclePositions.pb"
+    },
+    "members": [
+      "halifax_transit"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://api.cityofkingston.ca/gtfs-realtime/alerts.pb",
+      "trip_updates": "https://api.cityofkingston.ca/gtfs-realtime/tripupdates.pb",
+      "vehicle_positions": "https://api.cityofkingston.ca/gtfs-realtime/vehicleupdates.pb"
+    },
+    "members": [
+      "kingston_transit"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": null,
+      "trip_updates": "https://zenbus.net/gtfs/rt/poll.proto?file=tu&dataset=linter",
+      "vehicle_positions": "https://zenbus.net/gtfs/rt/poll.proto?file=vp&dataset=linter"
+    },
+    "members": [
+      "l'inter_des_laurentides"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "http://gtfs.ltconline.ca/Alert/Alerts.pb",
+      "trip_updates": "http://gtfs.ltconline.ca/TripUpdate/TripUpdates.pb",
+      "vehicle_positions": "http://gtfs.ltconline.ca/Vehicle/VehiclePositions.pb"
+    },
+    "members": [
+      "london_transit_commission"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": null,
+      "trip_updates": "https://www.miapp.ca/GTFS_RT/TripUpdate/TripUpdates.pb",
+      "vehicle_positions": "https://www.miapp.ca/GTFS_RT/Vehicle/VehiclePositions.pb"
+    },
+    "members": [
+      "miway"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": null,
+      "trip_updates": "https://zenbus.net/gtfs/rt/poll.proto?file=tu&dataset=tcmt6w8qbuxm",
+      "vehicle_positions": "https://zenbus.net/gtfs/rt/poll.proto?file=vp&dataset=tcmt6w8qbuxm"
+    },
+    "members": [
+      "mrc_montcalm",
+      "transport_en_commun_mont_tremblant",
+      "ville_de_saint_jean_sur_richelieu"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": null,
+      "trip_updates": "https://nextrip-public-api.azure-api.net/octranspo/gtfs-rt-tp/beta/v1/TripUpdates",
+      "vehicle_positions": "https://nextrip-public-api.azure-api.net/octranspo/gtfs-rt-vp/beta/v1/VehiclePositions"
+    },
+    "members": [
+      "oc_transpo"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": null,
+      "trip_updates": "https://rmwb-gtfsrt.civilia.ca/pb/tripUpdates.pb",
+      "vehicle_positions": "https://rmwb-gtfsrt.civilia.ca/pb/vehiclePositions.pb"
+    },
+    "members": [
+      "regional_municipality_of_wood_buffalo"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": null,
+      "trip_updates": "http://67.212.79.244:8080/hermes_st_Transcollines/pb/tripUpdates.pb",
+      "vehicle_positions": "http://67.212.79.244:8080/hermes_st_Transcollines/pb/vehiclePositions.pb"
+    },
+    "members": [
+      "ritc_transcollines"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "http://apps2.saskatoon.ca/app/data/Alert/Alerts.pb",
+      "trip_updates": "http://apps2.saskatoon.ca/app/data/TripUpdate/TripUpdates.pb",
+      "vehicle_positions": "http://apps2.saskatoon.ca/app/data/Vehicle/VehiclePositions.pb"
+    },
+    "members": [
+      "saskatoon_transit"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://zenbus.net/gtfs/rt/poll.proto?dataset=pierre-de-saurel",
+      "trip_updates": "https://zenbus.net/gtfs/rt/poll.proto?dataset=pierre-de-saurel",
+      "vehicle_positions": "https://zenbus.net/gtfs/rt/poll.proto?dataset=pierre-de-saurel"
+    },
+    "members": [
+      "stc_pierre_de_saurel"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "http://api.nextlift.ca/gtfs-realtime/alerts.pb",
+      "trip_updates": "http://api.nextlift.ca/gtfs-realtime/tripupdates.pb",
+      "vehicle_positions": "http://api.nextlift.ca/gtfs-realtime/vehicleupdates.pb"
+    },
+    "members": [
+      "thunder_bay_transit"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://bustime.ttc.ca/gtfsrt/alerts",
+      "trip_updates": "https://bustime.ttc.ca/gtfsrt/trips",
+      "vehicle_positions": null
+    },
+    "members": [
+      "toronto_transit_commission"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": "https://gtfs.translink.ca/v2/gtfsalerts",
+      "trip_updates": "https://gtfs.translink.ca/v2/gtfsrealtime",
+      "vehicle_positions": "https://gtfs.translink.ca/v2/gtfsposition"
+    },
+    "members": [
+      "translink_vancouver"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": null,
+      "trip_updates": "https://gtfs-rt.infra-hubup.fr/toutenbus/realtime",
+      "vehicle_positions": "https://gtfs-rt.infra-hubup.fr/lpdlestd/realtime"
+    },
+    "members": [
+      "ville_de_saint_hyacinthe"
+    ]
+  },
+  {
+    "shared_realtime": {
+      "service_alerts": null,
+      "trip_updates": "http://rtu.york.ca/gtfsrealtime/TripUpdates",
+      "vehicle_positions": "http://rtu.york.ca/gtfsrealtime/VehiclePositions"
+    },
+    "members": [
+      "york_region_transit"
+    ]
+  }
+]

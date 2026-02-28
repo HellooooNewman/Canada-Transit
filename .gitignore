@@ -1,0 +1,12 @@
+node_modules
+.pnpm-store
+.env
+.env.*
+!.env.example
+dist
+build
+.svelte-kit
+coverage
+*.log
+.DS_Store
+apps/api/prisma/migrations
