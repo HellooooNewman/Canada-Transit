@@ -48,6 +48,44 @@ type SourceRecord = {
   prov_terr?: string;
 };
 
+type RidershipCsvRow = {
+  REF_DATE?: string;
+  'Urban transit agency name'?: string;
+  'Total revenue and total passenger trips'?: string;
+  VALUE?: string;
+};
+
+type RidershipPoint = {
+  month: string;
+  value: number;
+};
+
+type AgencyRidershipSummary = {
+  sourceTableId: string;
+  agencyName: string;
+  latestPassengerTripsThousands: number | null;
+  latestPassengerTripsMonth: string | null;
+  latestRevenueThousandsCad: number | null;
+  latestRevenueMonth: string | null;
+  series: {
+    passengerTripsThousands: RidershipPoint[];
+    revenueThousandsCad: RidershipPoint[];
+  };
+};
+
+const RIDERSHIP_CSV = resolve(SCRIPT_DIR, 'data/ridership/canada/23100307.csv');
+const RIDERSHIP_TABLE_ID = '23100307';
+const RIDERSHIP_SLUG_ALIASES: Record<string, string[]> = {
+  t3_transit: ['Trius transit INC., Prince Edward Island (T3)'],
+  reseau_transport_longueuil: ['Reseau de transport de Longueuil', 'Réseau de transport de Longueuil'],
+  societe_transport_montreal: ['Societe de transport de Montreal (STM)', 'Société de transport de Montréal (STM)'],
+  toronto_transit_commission: ['Toronto transit commission (TTC)'],
+  go_transit: ['Metrolinx, Greater Toronto and Hamilton Area (GTHA)'],
+  edmonton_transit_service: ['Edmonton Transit Service (ETS)'],
+  translink_vancouver: ['South Coast British Columbia Transportation Authority (Translink)'],
+  bc_transit_victoria: ['BC Transit (Victoria Regional Transit System)'],
+};
+
 function parseCsv(input: string): CsvRow[] {
   const baseOptions = {
     columns: (headers: string[]) => headers.map((header) => header.trim()),
@@ -109,6 +147,99 @@ function chunkArray<T>(items: T[], size: number): T[][] {
 
 function getTable(tables: TableMap, tableName: string): CsvRow[] {
   return tables[tableName] ?? [];
+}
+
+function normalizeRidershipName(value: string) {
+  return value
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function slugToAgencyLikeName(slug: string) {
+  return slug.replaceAll('_', ' ');
+}
+
+function metricKeyFromLabel(label: string) {
+  const normalized = label.toLowerCase();
+  if (normalized.includes('total passenger trips')) return 'passengerTripsThousands' as const;
+  if (normalized.includes('total revenue, excluding subsidies')) return 'revenueThousandsCad' as const;
+  return null;
+}
+
+async function loadRidershipByAgencyName() {
+  try {
+    const input = await readFile(RIDERSHIP_CSV, 'utf8');
+    const rows = parseCsv(input) as RidershipCsvRow[];
+    const grouped = new Map<
+      string,
+      {
+        agencyName: string;
+        passengerTripsThousands: Map<string, number>;
+        revenueThousandsCad: Map<string, number>;
+      }
+    >();
+
+    for (const row of rows) {
+      const agencyName = toNullableString(row['Urban transit agency name']);
+      const month = toNullableString(row.REF_DATE);
+      const metricLabel = toNullableString(row['Total revenue and total passenger trips']);
+      const metricKey = metricLabel ? metricKeyFromLabel(metricLabel) : null;
+      const value = Number.parseFloat(String(row.VALUE ?? '').trim());
+
+      if (!agencyName || !month || !metricKey || !Number.isFinite(value)) continue;
+      const key = normalizeRidershipName(agencyName);
+      const current = grouped.get(key) ?? {
+        agencyName,
+        passengerTripsThousands: new Map<string, number>(),
+        revenueThousandsCad: new Map<string, number>(),
+      };
+      current[metricKey].set(month, value);
+      grouped.set(key, current);
+    }
+
+    const result = new Map<string, AgencyRidershipSummary>();
+    for (const [key, value] of grouped.entries()) {
+      const passengerTripsThousands = [...value.passengerTripsThousands.entries()]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([month, monthValue]) => ({ month, value: monthValue }));
+      const revenueThousandsCad = [...value.revenueThousandsCad.entries()]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([month, monthValue]) => ({ month, value: monthValue }));
+
+      const latestPassenger = passengerTripsThousands[passengerTripsThousands.length - 1];
+      const latestRevenue = revenueThousandsCad[revenueThousandsCad.length - 1];
+      result.set(key, {
+        sourceTableId: RIDERSHIP_TABLE_ID,
+        agencyName: value.agencyName,
+        latestPassengerTripsThousands: latestPassenger?.value ?? null,
+        latestPassengerTripsMonth: latestPassenger?.month ?? null,
+        latestRevenueThousandsCad: latestRevenue?.value ?? null,
+        latestRevenueMonth: latestRevenue?.month ?? null,
+        series: {
+          passengerTripsThousands,
+          revenueThousandsCad,
+        },
+      });
+    }
+
+    return result;
+  } catch {
+    // Keep seed resilient if optional ridership metadata is unavailable.
+    return new Map<string, AgencyRidershipSummary>();
+  }
+}
+
+function resolveRidershipForSlug(slug: string, ridershipByAgencyName: Map<string, AgencyRidershipSummary>) {
+  const fallbackNames = [slugToAgencyLikeName(slug), ...(RIDERSHIP_SLUG_ALIASES[slug] ?? [])];
+  for (const candidate of fallbackNames) {
+    const summary = ridershipByAgencyName.get(normalizeRidershipName(candidate));
+    if (summary) return summary;
+  }
+  return null;
 }
 
 async function listAgencyDirectories() {
@@ -626,7 +757,12 @@ async function insertGtfsTables(feedVersionId: string, tables: TableMap, tableNa
   }
 }
 
-async function importAgency(folderPath: string, slug: string, provinceBySlug: Map<string, string>) {
+async function importAgency(
+  folderPath: string,
+  slug: string,
+  provinceBySlug: Map<string, string>,
+  ridershipByAgencyName: Map<string, AgencyRidershipSummary>,
+) {
   const source = await resolveAgencySource(folderPath);
   if (!source) {
     return {
@@ -638,6 +774,11 @@ async function importAgency(folderPath: string, slug: string, provinceBySlug: Ma
 
   const now = new Date();
   const seededProvince = provinceBySlug.get(slug) ?? null;
+  const ridershipSummary = resolveRidershipForSlug(slug, ridershipByAgencyName);
+  const rawAgencyMetadata = {
+    folderPath,
+    ridership: ridershipSummary,
+  };
   const agency = await prisma.agency.upsert({
     where: { slug },
     update: {
@@ -646,7 +787,7 @@ async function importAgency(folderPath: string, slug: string, provinceBySlug: Ma
       source: DataProvenance.OFFICIAL,
       status: LifecycleStatus.EXISTING,
       effectiveFrom: now,
-      raw: { folderPath },
+      raw: rawAgencyMetadata,
     },
     create: {
       slug,
@@ -656,7 +797,7 @@ async function importAgency(folderPath: string, slug: string, provinceBySlug: Ma
       source: DataProvenance.OFFICIAL,
       status: LifecycleStatus.EXISTING,
       effectiveFrom: now,
-      raw: { folderPath },
+      raw: rawAgencyMetadata,
     },
   });
 
@@ -861,6 +1002,7 @@ async function importAgency(folderPath: string, slug: string, provinceBySlug: Ma
 async function main() {
   const agencies = await listAgencyDirectories();
   const provinceBySlug = await loadProvinceBySlug();
+  const ridershipByAgencyName = await loadRidershipByAgencyName();
   if (agencies.length === 0) {
     console.log('No GTFS agency directories found under prisma/data/gtfs.');
     return;
@@ -868,7 +1010,7 @@ async function main() {
 
   const summary: Array<Record<string, unknown>> = [];
   for (const agency of agencies) {
-    const result = await importAgency(agency.folderPath, agency.slug, provinceBySlug);
+    const result = await importAgency(agency.folderPath, agency.slug, provinceBySlug, ridershipByAgencyName);
     summary.push(result);
     console.log(`[seed][${agency.slug}] ${JSON.stringify(result)}`);
   }

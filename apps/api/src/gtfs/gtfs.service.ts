@@ -1,4 +1,5 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
+import { performance } from 'node:perf_hooks';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -34,9 +35,85 @@ type MapRouteRef = {
   agencyName?: string | null;
 };
 
+type AgencyRidership = {
+  sourceTableId: string;
+  agencyName: string;
+  latestPassengerTripsThousands: number | null;
+  latestPassengerTripsMonth: string | null;
+  latestRevenueThousandsCad: number | null;
+  latestRevenueMonth: string | null;
+  series?: {
+    passengerTripsThousands?: Array<{ month: string; value: number }>;
+    revenueThousandsCad?: Array<{ month: string; value: number }>;
+  };
+};
+
+type RouteServiceTimeBand = {
+  key: string;
+  label: string;
+  startHour: number;
+  endHour: number;
+};
+
+type DistanceSource = 'stop_times_shape_dist' | 'shape_dist' | 'shape_geometry' | 'stop_geometry' | 'unknown';
+
+type TripStopTimeForStats = {
+  tripId: string;
+  stopId: string;
+  stopSequence: number;
+  arrivalTime: string | null;
+  departureTime: string | null;
+  shapeDistTraveled: number | null;
+  stop: {
+    stopLat: number | null;
+    stopLon: number | null;
+  };
+};
+
+type MapRouteLinesStageTimings = {
+  activeFeedsMs: number;
+  bboxStopsMs: number;
+  bboxShapeKeysMs: number;
+  routesMs: number;
+  tripShapeStatsMs: number;
+  shapePointsMs: number;
+  simplifyMs: number;
+  totalMs: number;
+};
+
+type MapRouteLinesCacheEntry = {
+  key: string;
+  expiresAt: number;
+  createdAt: number;
+  value: Record<string, unknown>;
+};
+
+const SECONDS_PER_DAY = 24 * 60 * 60;
+const STATS_TIME_BANDS: RouteServiceTimeBand[] = [
+  { key: 'early_am', label: 'Early AM (03:00-06:00)', startHour: 3, endHour: 6 },
+  { key: 'am_peak', label: 'AM Peak (06:00-09:00)', startHour: 6, endHour: 9 },
+  { key: 'midday', label: 'Midday (09:00-15:00)', startHour: 9, endHour: 15 },
+  { key: 'pm_peak', label: 'PM Peak (15:00-19:00)', startHour: 15, endHour: 19 },
+  { key: 'evening', label: 'Evening (19:00-24:00)', startHour: 19, endHour: 24 },
+  { key: 'night', label: 'Night (00:00-03:00)', startHour: 0, endHour: 3 },
+];
+
 @Injectable()
 export class GtfsService {
+  private readonly logger = new Logger(GtfsService.name);
+  private readonly mapRouteLinesCache = new Map<string, MapRouteLinesCacheEntry>();
+  private readonly mapRouteLinesCacheTtlMs = 30_000;
+  private readonly mapRouteLinesCacheMaxEntries = 120;
+
   constructor(private readonly prisma: PrismaService) {}
+
+  private extractAgencyRidership(raw: Prisma.JsonValue | null): AgencyRidership | null {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    const rawObject = raw as Record<string, unknown>;
+    const ridership = rawObject.ridership;
+    if (!ridership || typeof ridership !== 'object' || Array.isArray(ridership)) return null;
+    return ridership as AgencyRidership;
+  }
 
   async getAgencies(limit = 300) {
     const agencies = await this.prisma.agency.findMany({
@@ -65,6 +142,7 @@ export class GtfsService {
       website: agency.website,
       activeFeedVersionId: agency.feedVersions[0]?.id ?? null,
       activeFeedImportedAt: agency.feedVersions[0]?.importedAt ?? null,
+      ridership: this.extractAgencyRidership(agency.raw),
     }));
   }
 
@@ -91,6 +169,81 @@ export class GtfsService {
     const maxLon = rawValues[3] as number;
     if (minLat > maxLat || minLon > maxLon) return null;
     return { minLat, minLon, maxLat, maxLon };
+  }
+
+  private quantizeForCache(value: number, step: number) {
+    return Math.round(value / step) * step;
+  }
+
+  private bboxQuantizationStepForZoom(zoom: number) {
+    if (zoom <= 6) return 0.75;
+    if (zoom <= 8) return 0.4;
+    if (zoom <= 11) return 0.15;
+    if (zoom <= 14) return 0.05;
+    return 0.015;
+  }
+
+  private quantizedBboxKey(bbox: Bbox, zoom: number) {
+    const step = this.bboxQuantizationStepForZoom(zoom);
+    return [
+      this.quantizeForCache(bbox.minLat, step).toFixed(4),
+      this.quantizeForCache(bbox.minLon, step).toFixed(4),
+      this.quantizeForCache(bbox.maxLat, step).toFixed(4),
+      this.quantizeForCache(bbox.maxLon, step).toFixed(4),
+    ].join(',');
+  }
+
+  private activeFeedFingerprint(rows: Array<{ id: string; importedAt: Date }>) {
+    return rows
+      .map((row) => `${row.id}:${row.importedAt.getTime()}`)
+      .sort()
+      .join('|');
+  }
+
+  private buildMapRouteLinesCacheKey(params: { bbox: Bbox; zoom: number; routeLimit: number; shapeLimit: number; activeFeeds: string }) {
+    return [
+      `bbox=${this.quantizedBboxKey(params.bbox, params.zoom)}`,
+      `zoom=${params.zoom}`,
+      `routeLimit=${params.routeLimit}`,
+      `shapeLimit=${params.shapeLimit}`,
+      `feeds=${params.activeFeeds}`,
+    ].join(';');
+  }
+
+  private readMapRouteLinesCache(key: string) {
+    const now = Date.now();
+    const hit = this.mapRouteLinesCache.get(key);
+    if (!hit) return null;
+    if (hit.expiresAt <= now) {
+      this.mapRouteLinesCache.delete(key);
+      return null;
+    }
+    return hit.value;
+  }
+
+  private writeMapRouteLinesCache(key: string, value: Record<string, unknown>) {
+    const now = Date.now();
+    this.mapRouteLinesCache.set(key, {
+      key,
+      createdAt: now,
+      expiresAt: now + this.mapRouteLinesCacheTtlMs,
+      value,
+    });
+    this.pruneMapRouteLinesCache(now);
+  }
+
+  private pruneMapRouteLinesCache(now = Date.now()) {
+    for (const [key, entry] of this.mapRouteLinesCache.entries()) {
+      if (entry.expiresAt <= now) {
+        this.mapRouteLinesCache.delete(key);
+      }
+    }
+    if (this.mapRouteLinesCache.size <= this.mapRouteLinesCacheMaxEntries) return;
+    const sorted = [...this.mapRouteLinesCache.values()].sort((a, b) => a.createdAt - b.createdAt);
+    const excess = this.mapRouteLinesCache.size - this.mapRouteLinesCacheMaxEntries;
+    for (const entry of sorted.slice(0, excess)) {
+      this.mapRouteLinesCache.delete(entry.key);
+    }
   }
 
   async getRoutes(params: {
@@ -616,6 +769,7 @@ export class GtfsService {
                 countryCode: true,
                 subdivisionCode: true,
                 timezone: true,
+                raw: true,
               },
             },
           },
@@ -726,7 +880,10 @@ export class GtfsService {
       routeColor: route.routeColor,
       routeTextColor: route.routeTextColor,
       agencyId: route.agencyId,
-      agency: route.feedVersion.agency,
+      agency: {
+        ...route.feedVersion.agency,
+        ridership: this.extractAgencyRidership(route.feedVersion.agency.raw),
+      },
       counts: {
         trips: trips.length,
         distinctStops: routeStopRows.length,
@@ -749,6 +906,278 @@ export class GtfsService {
             })),
           }
         : null,
+    };
+  }
+
+  async getMapRouteServiceStats(params: { feedVersionId: string; routeId: string; serviceDate?: string }) {
+    const route = await this.prisma.gtfsRoute.findUnique({
+      where: {
+        feedVersionId_routeId: {
+          feedVersionId: params.feedVersionId,
+          routeId: params.routeId,
+        },
+      },
+      select: {
+        feedVersionId: true,
+        routeId: true,
+      },
+    });
+    if (!route) return null;
+
+    const serviceDate = this.normalizeServiceDate(params.serviceDate);
+    const serviceProfile = await this.resolveActiveServiceProfile(route.feedVersionId, serviceDate);
+    const notes: string[] = [...serviceProfile.notes];
+
+    const tripWhere: Prisma.GtfsTripWhereInput = {
+      feedVersionId: route.feedVersionId,
+      routeId: route.routeId,
+      ...(serviceProfile.activeServiceIds ? { serviceId: { in: [...serviceProfile.activeServiceIds] } } : {}),
+    };
+
+    const trips = await this.prisma.gtfsTrip.findMany({
+      where: tripWhere,
+      select: {
+        tripId: true,
+        directionId: true,
+        shapeId: true,
+      },
+      take: 12_000,
+    });
+    const tripIds = trips.map((trip) => trip.tripId);
+    if (tripIds.length === 0) {
+      return {
+        feedVersionId: route.feedVersionId,
+        routeId: route.routeId,
+        serviceDate,
+        scheduledTrips: 0,
+        headwaysByTimeBand: STATS_TIME_BANDS.map((band) => ({
+          ...band,
+          tripDepartures: 0,
+          avgHeadwayMinutes: null,
+          tripsPerHour: 0,
+        })),
+        spanOfService: {
+          firstDeparture: null,
+          lastDeparture: null,
+          firstDepartureSeconds: null,
+          lastDepartureSeconds: null,
+          spanHours: 0,
+        },
+        stopCoverage: {
+          distinctStops: 0,
+          routeCoverageKm: 0,
+          stopsPerKm: null,
+          avgStopSpacingMeters: null,
+        },
+        supply: {
+          serviceHoursApprox: 0,
+          serviceKmApprox: 0,
+          vrhApprox: 0,
+          vrkApprox: 0,
+        },
+        methodology: {
+          calendarApplied: serviceProfile.calendarApplied,
+          frequencyFallbackUsed: false,
+          distanceSources: {
+            stop_times_shape_dist: 0,
+            shape_dist: 0,
+            shape_geometry: 0,
+            stop_geometry: 0,
+            unknown: 0,
+          },
+          notes,
+        },
+      };
+    }
+
+    const stopTimes = await this.prisma.gtfsStopTime.findMany({
+      where: {
+        feedVersionId: route.feedVersionId,
+        tripId: { in: tripIds },
+      },
+      orderBy: [{ tripId: 'asc' }, { stopSequence: 'asc' }],
+      select: {
+        tripId: true,
+        stopId: true,
+        stopSequence: true,
+        arrivalTime: true,
+        departureTime: true,
+        shapeDistTraveled: true,
+        stop: {
+          select: {
+            stopLat: true,
+            stopLon: true,
+          },
+        },
+      },
+      take: 250_000,
+    });
+
+    const frequencies = await this.prisma.gtfsFrequency.findMany({
+      where: {
+        feedVersionId: route.feedVersionId,
+        tripId: { in: tripIds },
+      },
+      select: {
+        tripId: true,
+        startTime: true,
+        endTime: true,
+        headwaySecs: true,
+      },
+      take: 30_000,
+    });
+
+    const shapeIds = [...new Set(trips.map((trip) => trip.shapeId).filter((value): value is string => Boolean(value)))];
+    const shapePoints =
+      shapeIds.length > 0
+        ? await this.prisma.gtfsShapePoint.findMany({
+            where: {
+              feedVersionId: route.feedVersionId,
+              shapeId: { in: shapeIds },
+            },
+            orderBy: [{ shapeId: 'asc' }, { shapePtSequence: 'asc' }],
+            select: {
+              shapeId: true,
+              shapePtLat: true,
+              shapePtLon: true,
+              shapeDistTraveled: true,
+            },
+            take: 350_000,
+          })
+        : [];
+
+    const stopTimesByTripId = new Map<string, TripStopTimeForStats[]>();
+    for (const stopTime of stopTimes as TripStopTimeForStats[]) {
+      const list = stopTimesByTripId.get(stopTime.tripId) ?? [];
+      list.push(stopTime);
+      stopTimesByTripId.set(stopTime.tripId, list);
+    }
+
+    const frequenciesByTripId = new Map<string, Array<{ startTime: string | null; endTime: string | null; headwaySecs: number | null }>>();
+    for (const row of frequencies) {
+      const list = frequenciesByTripId.get(row.tripId) ?? [];
+      list.push({
+        startTime: row.startTime,
+        endTime: row.endTime,
+        headwaySecs: row.headwaySecs,
+      });
+      frequenciesByTripId.set(row.tripId, list);
+    }
+
+    const shapePointsByShapeId = new Map<string, Array<{ lat: number; lon: number; shapeDistTraveled: number | null }>>();
+    for (const row of shapePoints) {
+      const list = shapePointsByShapeId.get(row.shapeId) ?? [];
+      list.push({
+        lat: row.shapePtLat,
+        lon: row.shapePtLon,
+        shapeDistTraveled: row.shapeDistTraveled,
+      });
+      shapePointsByShapeId.set(row.shapeId, list);
+    }
+
+    const departures: number[] = [];
+    const arrivals: number[] = [];
+    const distanceSources = {
+      stop_times_shape_dist: 0,
+      shape_dist: 0,
+      shape_geometry: 0,
+      stop_geometry: 0,
+      unknown: 0,
+    };
+    const distanceSamplesKm: number[] = [];
+    const distinctStopIds = new Set<string>();
+    let totalRuntimeSeconds = 0;
+    let totalDistanceKm = 0;
+
+    for (const trip of trips) {
+      const tripStopTimes = stopTimesByTripId.get(trip.tripId) ?? [];
+      if (tripStopTimes.length === 0) continue;
+      for (const stopTime of tripStopTimes) {
+        distinctStopIds.add(stopTime.stopId);
+      }
+
+      const firstStop = tripStopTimes[0];
+      const lastStop = tripStopTimes[tripStopTimes.length - 1];
+      if (!firstStop || !lastStop) continue;
+      const departureSeconds = this.parseGtfsTimeToSeconds(firstStop.departureTime ?? firstStop.arrivalTime);
+      const arrivalSeconds = this.parseGtfsTimeToSeconds(lastStop.arrivalTime ?? lastStop.departureTime);
+
+      if (departureSeconds !== null) departures.push(departureSeconds);
+      if (arrivalSeconds !== null) arrivals.push(arrivalSeconds);
+      if (departureSeconds !== null && arrivalSeconds !== null && arrivalSeconds >= departureSeconds) {
+        totalRuntimeSeconds += arrivalSeconds - departureSeconds;
+      }
+
+      const distanceEstimate = this.estimateTripDistanceKm(tripStopTimes, trip.shapeId, shapePointsByShapeId);
+      distanceSources[distanceEstimate.source] += 1;
+      if (distanceEstimate.km !== null && distanceEstimate.km > 0) {
+        totalDistanceKm += distanceEstimate.km;
+        distanceSamplesKm.push(distanceEstimate.km);
+      }
+    }
+
+    const firstDepartureSeconds = departures.length > 0 ? Math.min(...departures) : null;
+    const latestSeenSeconds = [...departures, ...arrivals];
+    const lastDepartureSeconds = latestSeenSeconds.length > 0 ? Math.max(...latestSeenSeconds) : null;
+    const spanHours =
+      firstDepartureSeconds !== null && lastDepartureSeconds !== null && lastDepartureSeconds >= firstDepartureSeconds
+        ? (lastDepartureSeconds - firstDepartureSeconds) / 3600
+        : 0;
+
+    const routeCoverageKm = distanceSamplesKm.length > 0 ? Math.max(...distanceSamplesKm) : 0;
+    const stopsPerKm = routeCoverageKm > 0 ? distinctStopIds.size / routeCoverageKm : null;
+    const avgStopSpacingMeters =
+      routeCoverageKm > 0 && distinctStopIds.size > 1 ? (routeCoverageKm * 1000) / (distinctStopIds.size - 1) : null;
+
+    const headwayBreakdown = this.buildHeadwayBreakdown({
+      departures,
+      frequenciesByTripId,
+      includeTripIds: new Set(tripIds),
+    });
+
+    if (headwayBreakdown.some((band) => band.fallbackCount > 0)) {
+      notes.push('Frequency-based headways were used as fallback where explicit departures were sparse.');
+    }
+
+    return {
+      feedVersionId: route.feedVersionId,
+      routeId: route.routeId,
+      serviceDate,
+      scheduledTrips: trips.length,
+      headwaysByTimeBand: headwayBreakdown.map((band) => ({
+        key: band.key,
+        label: band.label,
+        startHour: band.startHour,
+        endHour: band.endHour,
+        tripDepartures: band.tripDepartures,
+        avgHeadwayMinutes: band.avgHeadwayMinutes,
+        tripsPerHour: band.tripsPerHour,
+      })),
+      spanOfService: {
+        firstDeparture: this.formatGtfsSeconds(firstDepartureSeconds),
+        lastDeparture: this.formatGtfsSeconds(lastDepartureSeconds),
+        firstDepartureSeconds,
+        lastDepartureSeconds,
+        spanHours: this.roundTo(spanHours, 2),
+      },
+      stopCoverage: {
+        distinctStops: distinctStopIds.size,
+        routeCoverageKm: this.roundTo(routeCoverageKm, 2),
+        stopsPerKm: stopsPerKm === null ? null : this.roundTo(stopsPerKm, 2),
+        avgStopSpacingMeters: avgStopSpacingMeters === null ? null : Math.round(avgStopSpacingMeters),
+      },
+      supply: {
+        serviceHoursApprox: this.roundTo(totalRuntimeSeconds / 3600, 2),
+        serviceKmApprox: this.roundTo(totalDistanceKm, 2),
+        vrhApprox: this.roundTo(totalRuntimeSeconds / 3600, 2),
+        vrkApprox: this.roundTo(totalDistanceKm, 2),
+      },
+      methodology: {
+        calendarApplied: serviceProfile.calendarApplied,
+        frequencyFallbackUsed: headwayBreakdown.some((band) => band.fallbackCount > 0),
+        distanceSources,
+        notes,
+      },
     };
   }
 
@@ -784,6 +1213,7 @@ export class GtfsService {
                 countryCode: true,
                 subdivisionCode: true,
                 timezone: true,
+                raw: true,
               },
             },
           },
@@ -909,7 +1339,10 @@ export class GtfsService {
       parentStation: stop.parentStation,
       wheelchairBoarding: stop.wheelchairBoarding,
       platformCode: stop.platformCode,
-      agency: stop.feedVersion.agency,
+      agency: {
+        ...stop.feedVersion.agency,
+        ridership: this.extractAgencyRidership(stop.feedVersion.agency.raw),
+      },
       counts: {
         trips: tripIds.length,
         routes: routesById.size,
@@ -936,6 +1369,321 @@ export class GtfsService {
             }
           : null,
     };
+  }
+
+  private normalizeServiceDate(value?: string) {
+    if (value && /^\d{8}$/.test(value)) return value;
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    return `${year}${month}${day}`;
+  }
+
+  private weekdayCalendarField(date: Date): keyof Prisma.GtfsCalendarWhereInput {
+    const day = date.getDay();
+    if (day === 0) return 'sunday';
+    if (day === 1) return 'monday';
+    if (day === 2) return 'tuesday';
+    if (day === 3) return 'wednesday';
+    if (day === 4) return 'thursday';
+    if (day === 5) return 'friday';
+    return 'saturday';
+  }
+
+  private parseServiceDate(value: string) {
+    const year = Number.parseInt(value.slice(0, 4), 10);
+    const month = Number.parseInt(value.slice(4, 6), 10);
+    const day = Number.parseInt(value.slice(6, 8), 10);
+    return new Date(year, month - 1, day);
+  }
+
+  private async resolveActiveServiceProfile(feedVersionId: string, serviceDate: string) {
+    const date = this.parseServiceDate(serviceDate);
+    const weekdayField = this.weekdayCalendarField(date);
+
+    const calendarRows = await this.prisma.gtfsCalendar.findMany({
+      where: {
+        feedVersionId,
+        startDate: { lte: serviceDate },
+        endDate: { gte: serviceDate },
+      },
+      select: {
+        serviceId: true,
+        monday: true,
+        tuesday: true,
+        wednesday: true,
+        thursday: true,
+        friday: true,
+        saturday: true,
+        sunday: true,
+      },
+      take: 20_000,
+    });
+
+    const calendarDates = await this.prisma.gtfsCalendarDate.findMany({
+      where: {
+        feedVersionId,
+        date: serviceDate,
+      },
+      select: {
+        serviceId: true,
+        exceptionType: true,
+      },
+      take: 20_000,
+    });
+
+    const active = new Set<string>();
+    for (const row of calendarRows) {
+      const runs = row[weekdayField as keyof typeof row];
+      if (runs === true) {
+        active.add(row.serviceId);
+      }
+    }
+    for (const exception of calendarDates) {
+      if (exception.exceptionType === 1) active.add(exception.serviceId);
+      if (exception.exceptionType === 2) active.delete(exception.serviceId);
+    }
+
+    const notes: string[] = [];
+    const hasCalendarSignal = calendarRows.length > 0 || calendarDates.length > 0;
+    if (!hasCalendarSignal) {
+      notes.push('No calendar records found for this feed/date; metrics include all trips on the route.');
+      return {
+        activeServiceIds: null as Set<string> | null,
+        calendarApplied: false,
+        notes,
+      };
+    }
+    if (active.size === 0) {
+      notes.push('No active service IDs on this date after calendar rules and exceptions.');
+    }
+    return {
+      activeServiceIds: active,
+      calendarApplied: true,
+      notes,
+    };
+  }
+
+  private parseGtfsTimeToSeconds(value?: string | null) {
+    if (!value) return null;
+    const parsed = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(value.trim());
+    if (!parsed) return null;
+    const hours = Number.parseInt(parsed[1] ?? '', 10);
+    const minutes = Number.parseInt(parsed[2] ?? '', 10);
+    const seconds = Number.parseInt(parsed[3] ?? '0', 10);
+    if (!Number.isFinite(hours) || !Number.isFinite(minutes) || !Number.isFinite(seconds)) return null;
+    if (minutes < 0 || minutes > 59 || seconds < 0 || seconds > 59 || hours < 0) return null;
+    return hours * 3600 + minutes * 60 + seconds;
+  }
+
+  private formatGtfsSeconds(value: number | null) {
+    if (value === null) return null;
+    const wholeSeconds = Math.max(0, Math.floor(value));
+    const hours = Math.floor(wholeSeconds / 3600);
+    const minutes = Math.floor((wholeSeconds % 3600) / 60);
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+  }
+
+  private roundTo(value: number, decimals = 2) {
+    const factor = Math.pow(10, decimals);
+    return Math.round(value * factor) / factor;
+  }
+
+  private bandForSeconds(seconds: number): RouteServiceTimeBand {
+    const normalized = ((seconds % SECONDS_PER_DAY) + SECONDS_PER_DAY) % SECONDS_PER_DAY;
+    const hour = Math.floor(normalized / 3600);
+    const matched = STATS_TIME_BANDS.find((band) =>
+      band.startHour <= band.endHour
+        ? hour >= band.startHour && hour < band.endHour
+        : hour >= band.startHour || hour < band.endHour,
+    );
+    return matched ?? STATS_TIME_BANDS[0]!;
+  }
+
+  private bandDurationHours(band: RouteServiceTimeBand) {
+    return band.startHour <= band.endHour ? band.endHour - band.startHour : 24 - band.startHour + band.endHour;
+  }
+
+  private average(values: number[]) {
+    if (values.length === 0) return null;
+    return values.reduce((sum, value) => sum + value, 0) / values.length;
+  }
+
+  private toDistanceKm(rawDistance: number) {
+    if (!Number.isFinite(rawDistance) || rawDistance <= 0) return null;
+    if (rawDistance > 250) return rawDistance / 1000;
+    return rawDistance;
+  }
+
+  private haversineDistanceKm(lat1: number, lon1: number, lat2: number, lon2: number) {
+    const earthRadiusKm = 6371;
+    const toRad = (value: number) => (value * Math.PI) / 180;
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return earthRadiusKm * c;
+  }
+
+  private estimateTripDistanceKm(
+    tripStopTimes: TripStopTimeForStats[],
+    shapeId: string | null,
+    shapePointsByShapeId: Map<string, Array<{ lat: number; lon: number; shapeDistTraveled: number | null }>>,
+  ): { km: number | null; source: DistanceSource } {
+    const shapeDistValues = tripStopTimes
+      .map((row) => row.shapeDistTraveled)
+      .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+      .sort((a, b) => a - b);
+    if (shapeDistValues.length >= 2) {
+      const firstValue = shapeDistValues[0];
+      const lastValue = shapeDistValues[shapeDistValues.length - 1];
+      if (firstValue !== undefined && lastValue !== undefined) {
+        const candidate = this.toDistanceKm(lastValue - firstValue);
+        if (candidate !== null && candidate > 0) {
+          return { km: candidate, source: 'stop_times_shape_dist' };
+        }
+      }
+    }
+
+    if (shapeId) {
+      const shapePoints = shapePointsByShapeId.get(shapeId) ?? [];
+      const shapeDistanceValues = shapePoints
+        .map((row) => row.shapeDistTraveled)
+        .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+        .sort((a, b) => a - b);
+      if (shapeDistanceValues.length >= 2) {
+        const firstValue = shapeDistanceValues[0];
+        const lastValue = shapeDistanceValues[shapeDistanceValues.length - 1];
+        if (firstValue !== undefined && lastValue !== undefined) {
+          const candidate = this.toDistanceKm(lastValue - firstValue);
+          if (candidate !== null && candidate > 0) {
+            return { km: candidate, source: 'shape_dist' };
+          }
+        }
+      }
+
+      if (shapePoints.length >= 2) {
+        let distanceKm = 0;
+        for (let index = 1; index < shapePoints.length; index += 1) {
+          const prev = shapePoints[index - 1];
+          const next = shapePoints[index];
+          if (!prev || !next) continue;
+          distanceKm += this.haversineDistanceKm(prev.lat, prev.lon, next.lat, next.lon);
+        }
+        if (distanceKm > 0) {
+          return { km: distanceKm, source: 'shape_geometry' };
+        }
+      }
+    }
+
+    const stopPoints = tripStopTimes
+      .map((row) =>
+        row.stop.stopLat !== null && row.stop.stopLon !== null ? { lat: row.stop.stopLat, lon: row.stop.stopLon } : null,
+      )
+      .filter((value): value is { lat: number; lon: number } => value !== null);
+    if (stopPoints.length >= 2) {
+      let distanceKm = 0;
+      for (let index = 1; index < stopPoints.length; index += 1) {
+        const prev = stopPoints[index - 1];
+        const next = stopPoints[index];
+        if (!prev || !next) continue;
+        distanceKm += this.haversineDistanceKm(prev.lat, prev.lon, next.lat, next.lon);
+      }
+      if (distanceKm > 0) {
+        return { km: distanceKm, source: 'stop_geometry' };
+      }
+    }
+
+    return { km: null, source: 'unknown' };
+  }
+
+  private buildHeadwayBreakdown(params: {
+    departures: number[];
+    frequenciesByTripId: Map<string, Array<{ startTime: string | null; endTime: string | null; headwaySecs: number | null }>>;
+    includeTripIds: Set<string>;
+  }) {
+    const departuresByBand = new Map<string, number[]>();
+    for (const band of STATS_TIME_BANDS) {
+      departuresByBand.set(band.key, []);
+    }
+    for (const departureSeconds of params.departures) {
+      const band = this.bandForSeconds(departureSeconds);
+      departuresByBand.get(band.key)?.push(departureSeconds);
+    }
+
+    const fallbackHeadwaysByBand = new Map<string, number[]>();
+    for (const band of STATS_TIME_BANDS) {
+      fallbackHeadwaysByBand.set(band.key, []);
+    }
+    for (const [tripId, rows] of params.frequenciesByTripId.entries()) {
+      if (!params.includeTripIds.has(tripId)) continue;
+      for (const row of rows) {
+        if (!row.headwaySecs || row.headwaySecs <= 0) continue;
+        const startSeconds = this.parseGtfsTimeToSeconds(row.startTime);
+        const endSeconds = this.parseGtfsTimeToSeconds(row.endTime);
+        if (startSeconds === null || endSeconds === null) continue;
+        for (const band of STATS_TIME_BANDS) {
+          const overlapSeconds = this.overlapSecondsWithinServiceDay(startSeconds, endSeconds, band.startHour * 3600, band.endHour * 3600);
+          if (overlapSeconds > 0) {
+            fallbackHeadwaysByBand.get(band.key)?.push(row.headwaySecs / 60);
+          }
+        }
+      }
+    }
+
+    return STATS_TIME_BANDS.map((band) => {
+      const departures = [...(departuresByBand.get(band.key) ?? [])].sort((a, b) => a - b);
+      const scheduledHeadways: number[] = [];
+      for (let index = 1; index < departures.length; index += 1) {
+        const currentDeparture = departures[index];
+        const previousDeparture = departures[index - 1];
+        if (currentDeparture === undefined || previousDeparture === undefined) continue;
+        const headwayMinutes = (currentDeparture - previousDeparture) / 60;
+        if (headwayMinutes > 0) scheduledHeadways.push(headwayMinutes);
+      }
+      const fallbackHeadways = fallbackHeadwaysByBand.get(band.key) ?? [];
+      const combined = [...scheduledHeadways, ...fallbackHeadways];
+      const avgHeadway = this.average(combined);
+      const durationHours = this.bandDurationHours(band);
+      const tripsPerHour = avgHeadway && avgHeadway > 0 ? 60 / avgHeadway : departures.length / Math.max(durationHours, 1);
+      return {
+        key: band.key,
+        label: band.label,
+        startHour: band.startHour,
+        endHour: band.endHour,
+        tripDepartures: departures.length,
+        avgHeadwayMinutes: avgHeadway === null ? null : this.roundTo(avgHeadway, 1),
+        tripsPerHour: this.roundTo(tripsPerHour, 2),
+        fallbackCount: fallbackHeadways.length,
+      };
+    });
+  }
+
+  private overlapSecondsWithinServiceDay(start: number, end: number, bandStart: number, bandEnd: number) {
+    const normalizeWindow = (windowStart: number, windowEnd: number): Array<[number, number]> => {
+      const normalizedStart = ((windowStart % SECONDS_PER_DAY) + SECONDS_PER_DAY) % SECONDS_PER_DAY;
+      const normalizedEndRaw = ((windowEnd % SECONDS_PER_DAY) + SECONDS_PER_DAY) % SECONDS_PER_DAY;
+      return normalizedEndRaw > normalizedStart
+        ? ([[normalizedStart, normalizedEndRaw]] as Array<[number, number]>)
+        : [
+            [normalizedStart, SECONDS_PER_DAY],
+            [0, normalizedEndRaw],
+          ];
+    };
+    const left = normalizeWindow(start, end);
+    const right = normalizeWindow(bandStart, bandEnd);
+    let overlap = 0;
+    for (const [leftStart, leftEnd] of left) {
+      for (const [rightStart, rightEnd] of right) {
+        const startPoint = Math.max(leftStart, rightStart);
+        const endPoint = Math.min(leftEnd, rightEnd);
+        if (endPoint > startPoint) overlap += endPoint - startPoint;
+      }
+    }
+    return overlap;
   }
 
   private routeTypesForZoom(zoom: number) {
@@ -1134,26 +1882,54 @@ export class GtfsService {
     routeLimit?: number;
     shapeLimit?: number;
   }) {
-    const bbox = this.parseBbox(params.bbox);
+    const requestStartedAt = performance.now();
+    const stageTimings: MapRouteLinesStageTimings = {
+      activeFeedsMs: 0,
+      bboxStopsMs: 0,
+      bboxShapeKeysMs: 0,
+      routesMs: 0,
+      tripShapeStatsMs: 0,
+      shapePointsMs: 0,
+      simplifyMs: 0,
+      totalMs: 0,
+    };
     const zoom = params.zoom ?? 10;
     const renderMode = this.renderModeForZoom(zoom);
+    const routeLimit = Math.min(params.routeLimit ?? 1200, 5000);
+    const shapeLimit = Math.min(params.shapeLimit ?? 300, 2500);
+    const finalize = (payload: Record<string, unknown>, options?: { cacheKey?: string; cacheHit?: boolean }) => {
+      stageTimings.totalMs = Math.round(performance.now() - requestStartedAt);
+      if (options?.cacheKey && !options.cacheHit) {
+        this.writeMapRouteLinesCache(options.cacheKey, payload);
+      }
+      if (stageTimings.totalMs >= 1000) {
+        this.logger.log(
+          `[mapRouteLines] zoom=${zoom} routes=${routeLimit} shapes=${shapeLimit} cacheHit=${options?.cacheHit === true} totalMs=${stageTimings.totalMs} stages=${JSON.stringify(
+            stageTimings,
+          )}`,
+        );
+      }
+      return payload;
+    };
+
+    const bbox = this.parseBbox(params.bbox);
     if (!bbox) {
-      return {
+      return finalize({
         bbox: params.bbox,
         zoom,
         mode: renderMode,
         lines: [],
         corridors: [],
         counts: { agencies: 0, routes: 0, lines: 0 },
-      };
+      });
     }
 
-    const routeLimit = Math.min(params.routeLimit ?? 1200, 5000);
-    const shapeLimit = Math.min(params.shapeLimit ?? 300, 2500);
+    const activeFeedsStartedAt = performance.now();
     const activeFeedVersions = await this.prisma.gtfsFeedVersion.findMany({
       where: { isActive: true },
       select: {
         id: true,
+        importedAt: true,
         agency: {
           select: {
             id: true,
@@ -1163,20 +1939,29 @@ export class GtfsService {
         },
       },
     });
+    stageTimings.activeFeedsMs = Math.round(performance.now() - activeFeedsStartedAt);
 
     if (activeFeedVersions.length === 0) {
-      return {
+      return finalize({
         bbox: params.bbox,
         zoom,
         mode: renderMode,
         lines: [],
         corridors: [],
         counts: { agencies: 0, routes: 0, lines: 0 },
-      };
+      });
+    }
+
+    const activeFeeds = this.activeFeedFingerprint(activeFeedVersions);
+    const cacheKey = this.buildMapRouteLinesCacheKey({ bbox, zoom, routeLimit, shapeLimit, activeFeeds });
+    const cached = this.readMapRouteLinesCache(cacheKey);
+    if (cached) {
+      return finalize(cached, { cacheKey, cacheHit: true });
     }
 
     const feedVersionById = new Map(activeFeedVersions.map((row) => [row.id, row]));
     const activeFeedVersionIds = activeFeedVersions.map((row) => row.id);
+    const stopsStartedAt = performance.now();
     const stopsInView = await this.prisma.gtfsStop.findMany({
       where: {
         feedVersionId: { in: activeFeedVersionIds },
@@ -1186,32 +1971,41 @@ export class GtfsService {
       select: { feedVersionId: true },
       distinct: ['feedVersionId'],
     });
+    stageTimings.bboxStopsMs = Math.round(performance.now() - stopsStartedAt);
 
-    const shapeSamplesInView = await this.prisma.gtfsShapePoint.findMany({
-      where: {
-        feedVersionId: { in: activeFeedVersionIds },
-        shapePtLat: { gte: bbox.minLat, lte: bbox.maxLat },
-        shapePtLon: { gte: bbox.minLon, lte: bbox.maxLon },
-      },
-      select: { feedVersionId: true, shapeId: true },
-      distinct: ['feedVersionId', 'shapeId'],
-    });
+    const shapeKeysStartedAt = performance.now();
+    const shapeSamplesInView =
+      activeFeedVersionIds.length === 0
+        ? []
+        : await this.prisma.$queryRaw<Array<{ feedVersionId: string; shapeId: string }>>(Prisma.sql`
+            SELECT DISTINCT
+              "feedVersionId",
+              "shapeId"
+            FROM "GtfsShapePoint"
+            WHERE "feedVersionId" IN (${Prisma.join(activeFeedVersionIds)})
+              AND "shapePtLat" BETWEEN ${bbox.minLat} AND ${bbox.maxLat}
+              AND "shapePtLon" BETWEEN ${bbox.minLon} AND ${bbox.maxLon}
+            ORDER BY "feedVersionId", "shapeId"
+          `);
+    stageTimings.bboxShapeKeysMs = Math.round(performance.now() - shapeKeysStartedAt);
 
     const feedVersionsInView = [
       ...new Set([...stopsInView.map((row) => row.feedVersionId), ...shapeSamplesInView.map((row) => row.feedVersionId)]),
     ];
     const shapeKeysInView = new Set(shapeSamplesInView.map((row) => `${row.feedVersionId}::${row.shapeId}`));
     if (feedVersionsInView.length === 0) {
-      return {
+      return finalize({
         bbox: params.bbox,
         zoom,
         mode: renderMode,
         lines: [],
         corridors: [],
         counts: { agencies: 0, routes: 0, lines: 0 },
-      };
+      }, { cacheKey });
     }
 
+    const focusViaOnly = zoom <= 7;
+    const routesStartedAt = performance.now();
     const routeTypes = this.routeTypesForZoom(zoom);
     const viaFeedVersionIds = activeFeedVersions
       .filter((row) => {
@@ -1222,23 +2016,25 @@ export class GtfsService {
       .map((row) => row.id)
       .filter((feedVersionId) => feedVersionsInView.includes(feedVersionId));
 
-    const baseRoutes = await this.prisma.gtfsRoute.findMany({
-      where: {
-        feedVersionId: { in: feedVersionsInView },
-        ...(routeTypes ? { routeType: { in: routeTypes } } : {}),
-      },
-      orderBy: [{ routeType: 'asc' }, { routeShortName: 'asc' }, { routeLongName: 'asc' }],
-      take: routeLimit,
-      select: {
-        id: true,
-        feedVersionId: true,
-        routeId: true,
-        routeType: true,
-        routeShortName: true,
-        routeLongName: true,
-        routeColor: true,
-      },
-    });
+    const baseRoutes = focusViaOnly
+      ? []
+      : await this.prisma.gtfsRoute.findMany({
+          where: {
+            feedVersionId: { in: feedVersionsInView },
+            ...(routeTypes ? { routeType: { in: routeTypes } } : {}),
+          },
+          orderBy: [{ routeType: 'asc' }, { routeShortName: 'asc' }, { routeLongName: 'asc' }],
+          take: routeLimit,
+          select: {
+            id: true,
+            feedVersionId: true,
+            routeId: true,
+            routeType: true,
+            routeShortName: true,
+            routeLongName: true,
+            routeColor: true,
+          },
+        });
 
     const viaRoutes =
       viaFeedVersionIds.length > 0
@@ -1261,7 +2057,7 @@ export class GtfsService {
         : [];
 
     const routeByPrimaryId = new Map([...baseRoutes, ...viaRoutes].map((route) => [route.id, route]));
-    const allRoutes = zoom <= 7 ? [...viaRoutes] : [...routeByPrimaryId.values()];
+    const allRoutes = focusViaOnly ? [...viaRoutes] : [...routeByPrimaryId.values()];
     const viaRouteIds = new Set(viaRoutes.map((route) => route.id));
     const forcedRoutes = allRoutes.filter((route) => viaRouteIds.has(route.id));
     const remainingRoutes = allRoutes
@@ -1296,16 +2092,17 @@ export class GtfsService {
       }
       if (appendedInRound === 0) break;
     }
+    stageTimings.routesMs = Math.round(performance.now() - routesStartedAt);
 
     if (routes.length === 0) {
-      return {
+      return finalize({
         bbox: params.bbox,
         zoom,
         mode: renderMode,
         lines: [],
         corridors: [],
         counts: { agencies: 0, routes: 0, lines: 0 },
-      };
+      }, { cacheKey });
     }
 
     const routeByFeedAndRouteId = new Map(routes.map((route) => [`${route.feedVersionId}::${route.routeId}`, route]));
@@ -1313,6 +2110,7 @@ export class GtfsService {
       feedVersionId: route.feedVersionId,
       routeId: route.routeId,
     }));
+    const tripStatsStartedAt = performance.now();
     const tripShapeStats = await this.prisma.gtfsTrip.groupBy({
       by: ['feedVersionId', 'routeId', 'shapeId'],
       where: {
@@ -1323,6 +2121,7 @@ export class GtfsService {
       orderBy: [{ feedVersionId: 'asc' }, { routeId: 'asc' }, { _count: { shapeId: 'desc' } }, { shapeId: 'asc' }],
       take: 120_000,
     });
+    stageTimings.tripShapeStatsMs = Math.round(performance.now() - tripStatsStartedAt);
 
     const shapeKeysByRouteKey = new Map<string, string[]>();
     for (const row of tripShapeStats) {
@@ -1366,25 +2165,34 @@ export class GtfsService {
 
     const selectedShapeKeys = [...shapeKeyToRouteKey.keys()];
     if (selectedShapeKeys.length === 0) {
-      return {
+      return finalize({
         bbox: params.bbox,
         zoom,
         mode: renderMode,
         lines: [],
         corridors: [],
         counts: { agencies: 0, routes: routes.length, lines: 0 },
-      };
+      }, { cacheKey });
     }
 
-    const selectedFeedVersionIds = [...new Set(selectedShapeKeys.map((shapeKey) => shapeKey.split('::')[0] as string))];
-    const selectedShapeIds = [...new Set(selectedShapeKeys.map((shapeKey) => shapeKey.split('::')[1] as string))];
     const selectedShapeKeySet = new Set(selectedShapeKeys);
+    const selectedShapePairs = selectedShapeKeys.map((shapeKey) => {
+      const [feedVersionId, shapeId] = shapeKey.split('::');
+      return { feedVersionId: feedVersionId as string, shapeId: shapeId as string };
+    });
+    const selectedFeedVersionIds = [...new Set(selectedShapePairs.map((pair) => pair.feedVersionId))];
+    const selectedShapeIds = [...new Set(selectedShapePairs.map((pair) => pair.shapeId))];
+    const shapePointWhere =
+      selectedShapePairs.length <= 800
+        ? { OR: selectedShapePairs }
+        : {
+            feedVersionId: { in: selectedFeedVersionIds },
+            shapeId: { in: selectedShapeIds },
+          };
 
+    const shapePointsStartedAt = performance.now();
     const shapePoints = await this.prisma.gtfsShapePoint.findMany({
-      where: {
-        feedVersionId: { in: selectedFeedVersionIds },
-        shapeId: { in: selectedShapeIds },
-      },
+      where: shapePointWhere,
       orderBy: [{ feedVersionId: 'asc' }, { shapeId: 'asc' }, { shapePtSequence: 'asc' }],
       take: 500_000,
       select: {
@@ -1395,6 +2203,7 @@ export class GtfsService {
         shapePtSequence: true,
       },
     });
+    stageTimings.shapePointsMs = Math.round(performance.now() - shapePointsStartedAt);
 
     const pointsByShapeKey = new Map<string, Array<{ lat: number; lon: number; seq: number }>>();
     for (const point of shapePoints) {
@@ -1409,6 +2218,7 @@ export class GtfsService {
       pointsByShapeKey.set(shapeKey, existing);
     }
 
+    const simplifyStartedAt = performance.now();
     const lines: MapRouteLine[] = [];
     const agencyIds = new Set<string>();
     for (const [shapeKey, points] of pointsByShapeKey.entries()) {
@@ -1441,8 +2251,9 @@ export class GtfsService {
     }
 
     const corridors = this.buildCorridorsFromLines(lines);
+    stageTimings.simplifyMs = Math.round(performance.now() - simplifyStartedAt);
 
-    return {
+    return finalize({
       bbox: params.bbox,
       zoom,
       mode: renderMode,
@@ -1454,6 +2265,6 @@ export class GtfsService {
         lines: lines.length,
         corridors: corridors.length,
       },
-    };
+    }, { cacheKey });
   }
 }

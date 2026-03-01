@@ -352,6 +352,7 @@ model GtfsShapePoint {
 
   @@unique([feedVersionId, shapeId, shapePtSequence])
   @@index([feedVersionId, shapeId, shapePtSequence])
+  @@index([feedVersionId, shapePtLat, shapePtLon])
 }
 
 model GtfsFareAttribute {

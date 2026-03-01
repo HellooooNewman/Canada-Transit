@@ -1,6 +1,10 @@
 <script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte';
+  import type { ChartConfiguration } from 'chart.js';
   import { graphqlRequest } from '$lib/api';
+  import { fetchRouteLinesForBbox, fetchStopsForBbox, routeLimitForZoom, shapeLimitForZoom } from './map-data-client';
+  import MetricChart from '$lib/components/metric-chart.svelte';
+  import { buildDoughnutChartConfig, buildHorizontalBarChartConfig } from '$lib/charts/theme';
   import 'leaflet/dist/leaflet.css';
 
   type RouteLine = {
@@ -82,6 +86,14 @@
     maxLon: number;
   };
 
+  type AgencyRidership = {
+    sourceTableId?: string | null;
+    latestPassengerTripsThousands?: number | null;
+    latestPassengerTripsMonth?: string | null;
+    latestRevenueThousandsCad?: number | null;
+    latestRevenueMonth?: string | null;
+  };
+
   type RouteDetails = {
     feedVersionId: string;
     routeId: string;
@@ -99,6 +111,7 @@
       countryCode?: string | null;
       subdivisionCode?: string | null;
       timezone?: string | null;
+      ridership?: AgencyRidership | null;
     } | null;
     counts?: {
       trips: number;
@@ -122,6 +135,53 @@
     } | null;
   };
 
+  type RouteServiceStats = {
+    feedVersionId: string;
+    routeId: string;
+    serviceDate: string;
+    scheduledTrips: number;
+    headwaysByTimeBand: Array<{
+      key: string;
+      label: string;
+      startHour: number;
+      endHour: number;
+      tripDepartures: number;
+      avgHeadwayMinutes: number | null;
+      tripsPerHour: number;
+    }>;
+    spanOfService: {
+      firstDeparture: string | null;
+      lastDeparture: string | null;
+      firstDepartureSeconds: number | null;
+      lastDepartureSeconds: number | null;
+      spanHours: number;
+    };
+    stopCoverage: {
+      distinctStops: number;
+      routeCoverageKm: number;
+      stopsPerKm: number | null;
+      avgStopSpacingMeters: number | null;
+    };
+    supply: {
+      serviceHoursApprox: number;
+      serviceKmApprox: number;
+      vrhApprox: number;
+      vrkApprox: number;
+    };
+    methodology: {
+      calendarApplied: boolean;
+      frequencyFallbackUsed: boolean;
+      distanceSources: {
+        stop_times_shape_dist: number;
+        shape_dist: number;
+        shape_geometry: number;
+        stop_geometry: number;
+        unknown: number;
+      };
+      notes: string[];
+    };
+  };
+
   type StopDetails = {
     feedVersionId: string;
     stopId: string;
@@ -143,6 +203,7 @@
       countryCode?: string | null;
       subdivisionCode?: string | null;
       timezone?: string | null;
+      ridership?: AgencyRidership | null;
     } | null;
     counts?: {
       trips: number;
@@ -210,6 +271,8 @@
     }> | null;
     notes?: string | null;
   };
+
+  type RouteRealtimeVehicle = NonNullable<RouteRealtime['vehicles']>[number];
 
   type AgencyRealtimeHealth = {
     agencySlug: string;
@@ -296,7 +359,14 @@
   const BASE_STOP_MARKER_RADIUS = 2.9;
   const HOVER_STOP_MARKER_RADIUS = 6.2;
   const MIN_STOP_RENDER_ZOOM = 15;
+  const ROUTE_GEOMETRY_PANE = 'routeGeometryPane';
+  const ROUTE_STOP_PANE = 'routeStopPane';
+  const ROUTE_ANIMATION_PANE = 'routeAnimationPane';
+  const REALTIME_VEHICLE_PANE = 'realtimeVehiclePane';
   const ROUTE_GEOMETRY_FADE_MS = 220;
+  const HASH_ZOOM_DECIMALS = 2;
+  const HASH_COORD_DECIMALS = 5;
+  const VEHICLE_ROUTE_DISTANCE_THRESHOLD_PIXELS = 18;
 
   let mapEl: HTMLDivElement;
   let sidebarEl: HTMLDivElement | null = null;
@@ -342,6 +412,7 @@
   let refreshTimer: ReturnType<typeof setTimeout> | null = null;
   let realtimeRefreshTimer: ReturnType<typeof setInterval> | null = null;
   let inFlightAbort: AbortController | null = null;
+  let lastRouteLoadStartedAt = 0;
   let activeRequestId = 0;
   let hasLoadedAtLeastOnce = false;
   let coveredBbox: BboxRect | null = null;
@@ -352,6 +423,7 @@
   let cacheMode: 'corridor' | 'mixed' | 'detailed' | null = null;
   let cacheMayBeIncomplete = false;
   let incrementalPanCount = 0;
+  let shouldAutoFitInitialRoutes = true;
   let selectedRouteKey: string | null = null;
   let routeSummaries = new Map<string, RouteSummary>();
   let selectedRoute: RouteSummary | null = null;
@@ -360,6 +432,7 @@
   let detailLoading = false;
   let detailError = '';
   let routeDetails: RouteDetails | null = null;
+  let routeServiceStats: RouteServiceStats | null = null;
   let routeRealtime: RouteRealtime | null = null;
   let agencyRealtimeHealth: AgencyRealtimeHealth | null = null;
   let stopDetails: StopDetails | null = null;
@@ -375,11 +448,14 @@
   let highlightedSidebarStopMarker: any | null = null;
   let visibleStopMarkersByKey = new Map<string, any>();
   let pendingRouteScrollStopId: string | null = null;
+  let selectedRouteOverlayStopsByKey = new Map<string, StopPoint>();
+  let activeRouteStopOverlayRequestId = 0;
   const routeStopLocationCache = new Map<string, { lat: number; lon: number }>();
   const routeDetailsCache = new Map<
     string,
     {
       routeDetails: RouteDetails | null;
+      routeServiceStats: RouteServiceStats | null;
       routeRealtime: RouteRealtime | null;
       agencyRealtimeHealth: AgencyRealtimeHealth | null;
     }
@@ -392,14 +468,68 @@
       agencyRealtimeHealth: AgencyRealtimeHealth | null;
     }
   >();
+  let headwayChartConfig: ChartConfiguration<'bar'> | null = null;
+  let supplyChartConfig: ChartConfiguration<'bar'> | null = null;
+  let distanceQualityChartConfig: ChartConfiguration<'doughnut'> | null = null;
+  let hasRouteServiceStatsData = false;
 
   const MODE_HYSTERESIS_ZOOM = 1;
   const MAX_INCREMENTAL_PANS = 12;
   const LARGE_JUMP_RATIO = 1.8;
+  const ROUTE_REFRESH_DEBOUNCE_MS = 450;
+  const ROUTE_REFRESH_MIN_INTERVAL_MS = 700;
   $: modePills = modeLabel
     .split('|')
     .map((part) => part.trim())
     .filter((part) => part.length > 0);
+  $: headwayChartConfig =
+    routeServiceStats && routeServiceStats.headwaysByTimeBand.length > 0
+      ? buildHorizontalBarChartConfig(
+          routeServiceStats.headwaysByTimeBand.map((band) => band.label),
+          routeServiceStats.headwaysByTimeBand.map((band) => band.avgHeadwayMinutes ?? 0),
+          'Avg headway (min)',
+        )
+      : null;
+  $: supplyChartConfig = routeServiceStats
+    ? buildHorizontalBarChartConfig(
+        ['Service hours', 'VRH-ish', 'Service km', 'VRK-ish'],
+        [
+          routeServiceStats.supply.serviceHoursApprox,
+          routeServiceStats.supply.vrhApprox,
+          routeServiceStats.supply.serviceKmApprox,
+          routeServiceStats.supply.vrkApprox,
+        ],
+        'Supply values',
+      )
+    : null;
+  $: distanceQualityChartConfig =
+    routeServiceStats &&
+    Object.values(routeServiceStats.methodology.distanceSources).reduce((sum, count) => sum + count, 0) > 0
+      ? buildDoughnutChartConfig(
+          ['Stop time dist', 'Shape dist', 'Shape geometry', 'Stop geometry', 'Unknown'],
+          [
+            routeServiceStats.methodology.distanceSources.stop_times_shape_dist,
+            routeServiceStats.methodology.distanceSources.shape_dist,
+            routeServiceStats.methodology.distanceSources.shape_geometry,
+            routeServiceStats.methodology.distanceSources.stop_geometry,
+            routeServiceStats.methodology.distanceSources.unknown,
+          ],
+          'Distance source',
+        )
+      : null;
+  $: hasRouteServiceStatsData = Boolean(
+    routeServiceStats &&
+      (routeServiceStats.scheduledTrips > 0 ||
+        routeServiceStats.spanOfService.firstDeparture ||
+        routeServiceStats.spanOfService.lastDeparture ||
+        routeServiceStats.stopCoverage.distinctStops > 0 ||
+        routeServiceStats.stopCoverage.routeCoverageKm > 0 ||
+        routeServiceStats.supply.serviceHoursApprox > 0 ||
+        routeServiceStats.supply.serviceKmApprox > 0 ||
+        routeServiceStats.supply.vrhApprox > 0 ||
+        routeServiceStats.supply.vrkApprox > 0 ||
+        routeServiceStats.headwaysByTimeBand.some((band) => (band.tripDepartures ?? 0) > 0 || (band.avgHeadwayMinutes ?? 0) > 0)),
+  );
 
   function zoomModeLabel(zoom: number) {
     if (zoom <= 9) return 'subway + regional + VIA';
@@ -454,11 +584,127 @@
     return 'Other';
   }
 
+  function inferVehicleMode(routeType?: number | null, label?: string | null) {
+    const hint = (label ?? '').trim().toLowerCase();
+    if (routeType === 3 || hint.includes('bus') || hint.includes('coach')) return 'bus';
+    if (routeType === 0 || hint.includes('tram') || hint.includes('streetcar') || hint.includes('lrt')) return 'tram';
+    if (routeType === 1 || hint.includes('subway') || hint.includes('metro')) return 'subway';
+    if (routeType === 2 || hint.includes('rail') || hint.includes('train')) return 'rail';
+    if (routeType === 4 || hint.includes('ferry') || hint.includes('boat')) return 'ferry';
+    return 'other';
+  }
+
+  function vehicleModeIcon(mode: string) {
+    if (mode === 'bus') return '🚌';
+    if (mode === 'tram') return '🚊';
+    if (mode === 'subway') return '🚇';
+    if (mode === 'rail') return '🚆';
+    if (mode === 'ferry') return '⛴';
+    return '📍';
+  }
+
+  function vehicleModeLabel(mode: string) {
+    if (mode === 'bus') return 'Bus';
+    if (mode === 'tram') return 'Tram / Streetcar';
+    if (mode === 'subway') return 'Subway / Metro';
+    if (mode === 'rail') return 'Rail';
+    if (mode === 'ferry') return 'Ferry';
+    return 'Vehicle';
+  }
+
+  function activeRouteRealtimeLabel() {
+    const routeName = routeDetails?.routeShortName || selectedRoute?.routeShortName;
+    if (routeName) return routeName;
+    const routeLongName = routeDetails?.routeLongName || selectedRoute?.routeLongName;
+    if (routeLongName) return routeLongName;
+    return routeDetails?.routeId || selectedRoute?.routeId || 'Selected route';
+  }
+
+  function formatVehicleBearing(bearing?: number | null) {
+    if (typeof bearing !== 'number' || !Number.isFinite(bearing)) return 'n/a';
+    const normalized = ((bearing % 360) + 360) % 360;
+    return `${Math.round(normalized)}°`;
+  }
+
+  function realtimeVehicleTooltipHtml(vehicle: RouteRealtimeVehicle, mode: string) {
+    const title = escapeHtml(vehicle.label || vehicle.vehicleId || vehicle.tripId || 'Vehicle');
+    const modeDisplay = escapeHtml(vehicleModeLabel(mode));
+    const routeDisplay = escapeHtml(activeRouteRealtimeLabel());
+    const vehicleId = escapeHtml(vehicle.vehicleId || 'n/a');
+    const tripId = escapeHtml(vehicle.tripId || 'n/a');
+    const bearing = escapeHtml(formatVehicleBearing(vehicle.bearing));
+    const updated = escapeHtml(formatTimeLabel(vehicle.timestamp));
+    return `<div class="vehicle-tooltip-card">
+      <strong class="vehicle-tooltip-title">${title}</strong>
+      <div><span class="vehicle-tooltip-label">Mode:</span> ${modeDisplay}</div>
+      <div><span class="vehicle-tooltip-label">Route:</span> ${routeDisplay}</div>
+      <div><span class="vehicle-tooltip-label">Vehicle ID:</span> ${vehicleId}</div>
+      <div><span class="vehicle-tooltip-label">Trip ID:</span> ${tripId}</div>
+      <div><span class="vehicle-tooltip-label">Bearing:</span> ${bearing}</div>
+      <div><span class="vehicle-tooltip-label">Updated:</span> ${updated}</div>
+    </div>`;
+  }
+
   function formatTimeLabel(value?: string | null) {
     if (!value) return 'n/a';
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return value;
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  }
+
+  function formatRidershipFromThousands(value?: number | null, options?: { currency?: boolean }) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return 'n/a';
+    const actualValue = value * 1000;
+    const absoluteValue = Math.abs(actualValue);
+    const units: Array<{ threshold: number; suffix: string }> = [
+      { threshold: 1_000_000_000_000, suffix: 'T' },
+      { threshold: 1_000_000_000, suffix: 'B' },
+      { threshold: 1_000_000, suffix: 'M' },
+    ];
+
+    for (const unit of units) {
+      if (absoluteValue >= unit.threshold) {
+        const scaled = actualValue / unit.threshold;
+        const compact = scaled.toLocaleString(undefined, {
+          minimumFractionDigits: 0,
+          maximumFractionDigits: 1,
+        });
+        return options?.currency ? `$${compact}${unit.suffix} CAD` : `${compact}${unit.suffix}`;
+      }
+    }
+
+    const expanded = actualValue.toLocaleString(undefined, {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    });
+    return options?.currency ? `$${expanded} CAD` : expanded;
+  }
+
+  function formatServiceDate(value?: string | null) {
+    if (!value || value.length !== 8) return 'today';
+    const year = Number.parseInt(value.slice(0, 4), 10);
+    const month = Number.parseInt(value.slice(4, 6), 10);
+    const day = Number.parseInt(value.slice(6, 8), 10);
+    const date = new Date(year, month - 1, day);
+    if (Number.isNaN(date.getTime())) return value;
+    return date.toLocaleDateString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+    });
+  }
+
+  function formatCount(value?: number | null) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return 'n/a';
+    return value.toLocaleString(undefined, { maximumFractionDigits: 0 });
+  }
+
+  function formatDecimal(value?: number | null, digits = 1) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return 'n/a';
+    return value.toLocaleString(undefined, {
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
+    });
   }
 
   function asCssRouteColor(routeColor?: string | null) {
@@ -481,6 +727,7 @@
     detailLoading = false;
     detailError = '';
     routeDetails = null;
+    routeServiceStats = null;
     routeRealtime = null;
     agencyRealtimeHealth = null;
     stopDetails = null;
@@ -490,6 +737,7 @@
     selectedStop = null;
     selectedRoute = null;
     selectedRouteKey = null;
+    clearSelectedRouteStopOverlay();
     detailsAbort?.abort();
     routeRealtimeAbort?.abort();
     clearRealtimeVehicleMarkers();
@@ -517,14 +765,15 @@
   function clearSidebarStopHover() {
     hoveredSidebarStopKey = null;
     if (highlightedSidebarStopMarker) {
-      highlightedSidebarStopMarker.setStyle({
+      const baseStyle = highlightedSidebarStopMarker.__baseStopStyle ?? {
         radius: BASE_STOP_MARKER_RADIUS,
         color: '#f8fafc',
         weight: 1,
         fillColor: '#f8fafc',
         fillOpacity: 0.88,
         opacity: 0.9,
-      });
+      };
+      highlightedSidebarStopMarker.setStyle(baseStyle);
       highlightedSidebarStopMarker = null;
     }
   }
@@ -649,6 +898,7 @@
     const routeKey = summary.key;
     detailKind = 'route';
     routeDetails = null;
+    routeServiceStats = null;
     routeRealtime = null;
     agencyRealtimeHealth = null;
     stopDetails = null;
@@ -663,11 +913,13 @@
     const cached = routeDetailsCache.get(routeKey);
     if (cached) {
       routeDetails = cached.routeDetails;
+      routeServiceStats = cached.routeServiceStats;
       routeRealtime = cached.routeRealtime;
       agencyRealtimeHealth = cached.agencyRealtimeHealth;
       detailLoading = false;
       syncRealtimeVehicleMarkers();
       initializeAnimationPaths(latestVisibleLines);
+      void ensureSelectedRouteStopsVisible(summary, routeDetails);
       if (pendingRouteScrollStopId) {
         const scrolled = await scrollRouteStopIntoView(pendingRouteScrollStopId);
         if (scrolled) pendingRouteScrollStopId = null;
@@ -681,6 +933,7 @@
     try {
       const result = await graphqlRequest<{
         mapRouteDetails: RouteDetails | null;
+        mapRouteServiceStats: RouteServiceStats | null;
         mapRouteRealtime: RouteRealtime | null;
         agencyRealtimeHealth: AgencyRealtimeHealth | null;
       }>(
@@ -691,6 +944,7 @@
           }),
         `query MapRouteDetails($feedVersionId: String!, $routeId: String!, $agencySlug: String!) {
           mapRouteDetails(feedVersionId: $feedVersionId, routeId: $routeId)
+          mapRouteServiceStats(feedVersionId: $feedVersionId, routeId: $routeId)
           mapRouteRealtime(feedVersionId: $feedVersionId, routeId: $routeId, agencySlug: $agencySlug)
           agencyRealtimeHealth(slug: $agencySlug)
         }`,
@@ -702,15 +956,18 @@
       );
       if (requestId !== activeDetailRequestId) return;
       routeDetails = result.mapRouteDetails ?? null;
+      routeServiceStats = result.mapRouteServiceStats ?? null;
       routeRealtime = result.mapRouteRealtime ?? null;
       agencyRealtimeHealth = result.agencyRealtimeHealth ?? null;
       routeDetailsCache.set(routeKey, {
         routeDetails,
+        routeServiceStats,
         routeRealtime,
         agencyRealtimeHealth,
       });
       syncRealtimeVehicleMarkers();
       initializeAnimationPaths(latestVisibleLines);
+      void ensureSelectedRouteStopsVisible(summary, routeDetails);
       if (!routeDetails) {
         detailError = 'No additional route details found.';
       } else if (pendingRouteScrollStopId) {
@@ -748,9 +1005,11 @@
     selectedStop = stop;
     selectedRoute = null;
     selectedRouteKey = null;
+    clearSelectedRouteStopOverlay();
     applySelectionStyles();
     clearRealtimeVehicleMarkers();
     routeDetails = null;
+    routeServiceStats = null;
     routeRealtime = null;
     agencyRealtimeHealth = null;
     stopDetails = null;
@@ -827,14 +1086,6 @@
       merged.set(lineKey(line), line);
     }
     return [...merged.values()];
-  }
-
-  function stopLimitForZoom(zoom: number) {
-    if (zoom <= 7) return 250;
-    if (zoom <= 10) return 900;
-    if (zoom <= 12) return 2200;
-    if (zoom <= 14) return 5000;
-    return 10_000;
   }
 
   function applySelectionStyles() {
@@ -916,25 +1167,73 @@
     ).length;
   }
 
+  function selectedRouteLinesInView() {
+    if (!selectedRouteKey) return [];
+    return latestVisibleLines.filter((line) => routeKeyFor(line) === selectedRouteKey && line.points.length >= 2);
+  }
+
+  function vehicleDistanceToRoutePixels(lat: number, lon: number, routeLines: RouteLine[]) {
+    if (!map || routeLines.length === 0) return Number.POSITIVE_INFINITY;
+    const vehiclePoint = map.latLngToContainerPoint([lat, lon]);
+    let minDistance = Number.POSITIVE_INFINITY;
+    for (const line of routeLines) {
+      const pathPixels = line.points.map((point) => map.latLngToContainerPoint([point[0], point[1]]));
+      for (let index = 1; index < pathPixels.length; index += 1) {
+        const { distancePixels } = distancePointToSegmentInPixels(vehiclePoint, pathPixels[index - 1], pathPixels[index]);
+        if (distancePixels < minDistance) minDistance = distancePixels;
+        if (minDistance <= VEHICLE_ROUTE_DISTANCE_THRESHOLD_PIXELS) return minDistance;
+      }
+    }
+    return minDistance;
+  }
+
   function syncRealtimeVehicleMarkers() {
     clearRealtimeVehicleMarkers();
     if (!realtimeVehicleLayer || !selectedRouteKey) return;
     const vehicles = routeRealtime?.vehicles ?? [];
     const routeAccent = asCssRouteColor(routeDetails?.routeColor ?? selectedRoute?.routeColor);
-    for (const vehicle of vehicles) {
+    const routeAccentText = contrastColor(routeAccent);
+    const routeLines = selectedRouteLinesInView();
+    const geolocatedVehicles = vehicles.filter(
+      (vehicle) =>
+        typeof vehicle?.latitude === 'number' &&
+        Number.isFinite(vehicle.latitude) &&
+        typeof vehicle?.longitude === 'number' &&
+        Number.isFinite(vehicle.longitude),
+    );
+    const spatiallyFiltered =
+      routeLines.length > 0
+        ? geolocatedVehicles.filter(
+            (vehicle) =>
+              vehicleDistanceToRoutePixels(vehicle.latitude as number, vehicle.longitude as number, routeLines) <=
+              VEHICLE_ROUTE_DISTANCE_THRESHOLD_PIXELS,
+          )
+        : geolocatedVehicles;
+    const markersToRender = spatiallyFiltered.length > 0 ? spatiallyFiltered : geolocatedVehicles;
+    for (const vehicle of markersToRender) {
       const lat = vehicle?.latitude;
       const lon = vehicle?.longitude;
       if (typeof lat !== 'number' || typeof lon !== 'number' || !Number.isFinite(lat) || !Number.isFinite(lon)) continue;
-      const marker = L.circleMarker([lat, lon], {
-        radius: 5.4,
-        color: '#f8fafc',
-        weight: 1.2,
-        fillColor: routeAccent,
-        fillOpacity: 0.95,
-        opacity: 1,
+      const mode = inferVehicleMode(routeDetails?.routeType ?? selectedRoute?.routeType, vehicle.label);
+      const icon = L.divIcon({
+        className: 'vehicle-icon-shell',
+        html: `<div class="vehicle-marker vehicle-marker--${mode}" style="--vehicle-color:${escapeHtml(routeAccent)};--vehicle-text:${escapeHtml(routeAccentText)}"><span class="vehicle-marker__glyph">${vehicleModeIcon(mode)}</span></div>`,
+        iconSize: [24, 24],
+        iconAnchor: [12, 12],
+        tooltipAnchor: [0, -12],
       });
-      const label = vehicle.label || vehicle.vehicleId || vehicle.tripId || 'Vehicle';
-      marker.bindTooltip(label, { direction: 'top', offset: [0, -2], opacity: 0.9 });
+      const marker = L.marker([lat, lon], {
+        icon,
+        keyboard: false,
+        pane: REALTIME_VEHICLE_PANE,
+      });
+      marker.bindTooltip(realtimeVehicleTooltipHtml(vehicle, mode), {
+        direction: 'top',
+        offset: [0, -10],
+        opacity: 0.95,
+        sticky: true,
+        className: 'vehicle-tooltip',
+      });
       realtimeVehicleLayer.addLayer(marker);
     }
   }
@@ -1137,6 +1436,7 @@
       if (cycleDurationMs <= 0 || phases.length === 0) continue;
 
       const marker = L.circleMarker(line.points[0], {
+        pane: ROUTE_ANIMATION_PANE,
         radius: 5.4,
         color: '#f8fafc',
         weight: 1.3,
@@ -1259,6 +1559,29 @@
     closeDetails();
   }
 
+  function parseMapHash(hashValue: string) {
+    const raw = hashValue.startsWith('#') ? hashValue.slice(1) : hashValue;
+    if (!raw) return null;
+    const [zoomRaw, latRaw, lonRaw] = raw.split('/');
+    if (!zoomRaw || !latRaw || !lonRaw) return null;
+    const zoom = Number(zoomRaw);
+    const lat = Number(latRaw);
+    const lon = Number(lonRaw);
+    if (!Number.isFinite(zoom) || !Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+    if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return null;
+    return { zoom, lat, lon };
+  }
+
+  function serializeMapHash() {
+    if (!map || typeof window === 'undefined') return;
+    const center = map.getCenter();
+    const zoom = map.getZoom();
+    if (!center || !Number.isFinite(center.lat) || !Number.isFinite(center.lng) || !Number.isFinite(zoom)) return;
+    const fragment = `${zoom.toFixed(HASH_ZOOM_DECIMALS)}/${center.lat.toFixed(HASH_COORD_DECIMALS)}/${center.lng.toFixed(HASH_COORD_DECIMALS)}`;
+    if (window.location.hash === `#${fragment}`) return;
+    window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}#${fragment}`);
+  }
+
   async function detectLocationOrFallback() {
     if (!('geolocation' in navigator)) {
       return TORONTO_CENTER;
@@ -1322,10 +1645,6 @@
   function onCitySearchSubmit(event: SubmitEvent) {
     event.preventDefault();
     void zoomToCity();
-  }
-
-  function bboxToString(bbox: BboxRect) {
-    return `${bbox.minLat},${bbox.minLon},${bbox.maxLat},${bbox.maxLon}`;
   }
 
   function getViewportBbox() {
@@ -1425,6 +1744,127 @@
         stop.stopLon >= bbox.minLon &&
         stop.stopLon <= bbox.maxLon,
     );
+  }
+
+  function renderedStopsForViewport(bbox: BboxRect, nextMode: 'corridor' | 'mixed' | 'detailed') {
+    const shouldIncludeViewportStops = nextMode !== 'corridor' && currentZoom >= MIN_STOP_RENDER_ZOOM;
+    const renderedStopsByKey = new Map<string, StopPoint>();
+    if (shouldIncludeViewportStops) {
+      for (const stop of cachedStopsSnapshotInBbox(bbox)) {
+        renderedStopsByKey.set(stopKey(stop), stop);
+      }
+    }
+    for (const stop of selectedRouteOverlayStopsByKey.values()) {
+      renderedStopsByKey.set(stopKey(stop), stop);
+    }
+    return [...renderedStopsByKey.values()];
+  }
+
+  function redrawStopsForCurrentViewport() {
+    if (!map) return;
+    const viewportBbox = getViewportBbox();
+    const activeMode = cacheMode ?? renderMode;
+    drawStops(renderedStopsForViewport(viewportBbox, activeMode));
+  }
+
+  function clearSelectedRouteStopOverlay(options?: { redraw?: boolean }) {
+    activeRouteStopOverlayRequestId += 1;
+    if (selectedRouteOverlayStopsByKey.size === 0 && options?.redraw !== true) return;
+    selectedRouteOverlayStopsByKey = new Map();
+    if (options?.redraw !== false) {
+      redrawStopsForCurrentViewport();
+    }
+  }
+
+  async function fetchStopPointById(feedVersionId: string, stopId: string, fallbackName?: string | null) {
+    const cached = cachedStopsByKey.get(stopSelectionKey(feedVersionId, stopId));
+    if (cached) return cached;
+    try {
+      const result = await graphqlRequest<{ mapStopDetails: StopDetails | null }>(
+        fetch,
+        `query MapRouteStopMarker($feedVersionId: String!, $stopId: String!) {
+          mapStopDetails(feedVersionId: $feedVersionId, stopId: $stopId)
+        }`,
+        { feedVersionId, stopId },
+      );
+      const details = result.mapStopDetails;
+      if (!details) return null;
+      if (typeof details.stopLat !== 'number' || typeof details.stopLon !== 'number') return null;
+      const point: StopPoint = {
+        feedVersionId,
+        stopId,
+        stopName: details.stopName ?? fallbackName ?? null,
+        stopLat: details.stopLat,
+        stopLon: details.stopLon,
+        wheelchairBoarding: details.wheelchairBoarding ?? null,
+        agencyId: details.agency?.id ?? undefined,
+        agencySlug: details.agency?.slug ?? undefined,
+        agencyName: details.agency?.displayName ?? undefined,
+      };
+      routeStopLocationCache.set(stopSelectionKey(feedVersionId, stopId), {
+        lat: details.stopLat,
+        lon: details.stopLon,
+      });
+      return point;
+    } catch (err) {
+      console.warn('Unable to load route stop marker', err);
+      return null;
+    }
+  }
+
+  async function ensureSelectedRouteStopsVisible(summary: RouteSummary, details: RouteDetails | null) {
+    const expectedRouteKey = summary.key;
+    const requestId = ++activeRouteStopOverlayRequestId;
+    const routeStops = details?.routePath?.stops ?? [];
+    if (routeStops.length === 0) {
+      if (selectedRouteKey === expectedRouteKey) {
+        selectedRouteOverlayStopsByKey = new Map();
+        redrawStopsForCurrentViewport();
+      }
+      return;
+    }
+
+    const seenStopIds = new Set<string>();
+    const missingStops: Array<{ stopId: string; stopName?: string | null }> = [];
+    for (const routeStop of routeStops) {
+      if (seenStopIds.has(routeStop.stopId)) continue;
+      seenStopIds.add(routeStop.stopId);
+      const key = stopSelectionKey(summary.feedVersionId, routeStop.stopId);
+      if (cachedStopsByKey.has(key) || selectedRouteOverlayStopsByKey.has(key)) continue;
+      missingStops.push({
+        stopId: routeStop.stopId,
+        stopName: routeStop.stopName,
+      });
+    }
+
+    const fetchedStops = await Promise.all(
+      missingStops.map((routeStop) => fetchStopPointById(summary.feedVersionId, routeStop.stopId, routeStop.stopName)),
+    );
+    if (requestId !== activeRouteStopOverlayRequestId || selectedRouteKey !== expectedRouteKey) return;
+
+    const fetchedByStopId = new Map<string, StopPoint>();
+    for (const stop of fetchedStops) {
+      if (stop?.stopId) {
+        fetchedByStopId.set(stop.stopId, stop);
+      }
+    }
+
+    const nextOverlayStops = new Map<string, StopPoint>();
+    for (const routeStop of routeStops) {
+      const key = stopSelectionKey(summary.feedVersionId, routeStop.stopId);
+      const resolvedStop =
+        cachedStopsByKey.get(key) ?? selectedRouteOverlayStopsByKey.get(key) ?? fetchedByStopId.get(routeStop.stopId);
+      if (resolvedStop) {
+        nextOverlayStops.set(key, resolvedStop);
+      }
+    }
+
+    selectedRouteOverlayStopsByKey = nextOverlayStops;
+    const fetchedStopPoints = [...fetchedByStopId.values()];
+    if (fetchedStopPoints.length > 0) {
+      mergeStopCache(fetchedStopPoints);
+    }
+    redrawStopsForCurrentViewport();
   }
 
   function subtractBbox(target: BboxRect, covered: BboxRect): BboxRect[] {
@@ -1662,10 +2102,44 @@
     detailLoading = false;
     detailError = '';
     routeDetails = null;
+    routeServiceStats = null;
     stopDetails = null;
     selectedStop = null;
     corridorDetailRoutes = displayRoutes;
     canReturnToCorridor = false;
+  }
+
+  function nearestRouteKeyAt(lat: number, lon: number, thresholdPixels = 16) {
+    if (!map || latestVisibleLines.length === 0) return null;
+    const clickPoint = map.latLngToContainerPoint([lat, lon]);
+    let bestRouteKey: string | null = null;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (const line of latestVisibleLines) {
+      if (!line.points || line.points.length < 2) continue;
+      const pathPixels = line.points.map((point) => map.latLngToContainerPoint([point[0], point[1]]));
+      for (let index = 1; index < pathPixels.length; index += 1) {
+        const { distancePixels } = distancePointToSegmentInPixels(clickPoint, pathPixels[index - 1], pathPixels[index]);
+        if (distancePixels < bestDistance) {
+          bestDistance = distancePixels;
+          bestRouteKey = routeKeyFor(line);
+        }
+        if (bestDistance <= thresholdPixels) break;
+      }
+      if (bestDistance <= thresholdPixels) break;
+    }
+    return bestDistance <= thresholdPixels ? bestRouteKey : null;
+  }
+
+  function openCorridorDetailsFromClick(routeRefs: CorridorRouteRef[], lat: number, lon: number) {
+    const displayRoutes = dedupeRouteRefsForDisplay(routeRefs);
+    if (displayRoutes.length > 0) {
+      openCorridorDetails(displayRoutes);
+      return;
+    }
+    const fallbackRouteKey = nearestRouteKeyAt(lat, lon, currentZoom >= 15 ? 18 : 14);
+    if (fallbackRouteKey) {
+      handleRouteSelection(fallbackRouteKey);
+    }
   }
 
   function handleRouteSelection(routeKey: string, options?: { fromCorridor?: boolean }) {
@@ -1681,6 +2155,7 @@
     selectedRoute = routeSummaries.get(routeKey) ?? null;
     pendingRouteScrollStopId = selectedStop?.stopId ?? null;
     selectedStop = null;
+    clearSelectedRouteStopOverlay();
     canReturnToCorridor = options?.fromCorridor === true && corridorDetailRoutes.length > 1;
     applySelectionStyles();
     if (selectedRoute) {
@@ -1694,6 +2169,7 @@
     detailLoading = false;
     detailError = '';
     routeDetails = null;
+    routeServiceStats = null;
     stopDetails = null;
     canReturnToCorridor = false;
   }
@@ -1705,6 +2181,7 @@
       const routeKey = routeKeyFor(lineData);
       const baseWeight = parseLineWeight(lineData.routeType, currentZoom);
       const polyline = L.polyline(lineData.points, {
+        pane: ROUTE_GEOMETRY_PANE,
         color: normalizeColor(lineData, index),
         weight: baseWeight,
         opacity: 0,
@@ -1740,6 +2217,7 @@
       if (!corridor.points || corridor.points.length < 2) continue;
       const baseWeight = corridor.routeCount > 1 ? 7.2 : 5.4;
       const casing = L.polyline(corridor.points, {
+        pane: ROUTE_GEOMETRY_PANE,
         color: '#020617',
         weight: baseWeight,
         opacity: 0,
@@ -1754,19 +2232,22 @@
         if (event?.originalEvent) {
           L.DomEvent.stopPropagation(event.originalEvent);
         }
+        const clickLat = event?.latlng?.lat ?? corridor.points[0][0];
+        const clickLon = event?.latlng?.lng ?? corridor.points[0][1];
         const nearbyRoutes = collectNearbyCorridorRoutes(
           sortedCorridors,
-          event?.latlng?.lat ?? corridor.points[0][0],
-          event?.latlng?.lng ?? corridor.points[0][1],
+          clickLat,
+          clickLon,
         );
         const candidateRoutes = nearbyRoutes.length > 0 ? nearbyRoutes : corridor.routeRefs;
         casing.setPopupContent(corridorPopupHtml(candidateRoutes));
-        openCorridorDetails(candidateRoutes);
+        openCorridorDetailsFromClick(candidateRoutes, clickLat, clickLon);
       });
       routeLayer.addLayer(casing);
       rendered.push(casing);
 
       const core = L.polyline(corridor.points, {
+        pane: ROUTE_GEOMETRY_PANE,
         color: corridor.routeCount > 1 ? '#334155' : '#1e293b',
         weight: Math.max(2.6, baseWeight - 2.4),
         opacity: 0,
@@ -1780,12 +2261,14 @@
         if (event?.originalEvent) {
           L.DomEvent.stopPropagation(event.originalEvent);
         }
+        const clickLat = event?.latlng?.lat ?? corridor.points[0][0];
+        const clickLon = event?.latlng?.lng ?? corridor.points[0][1];
         const nearbyRoutes = collectNearbyCorridorRoutes(
           sortedCorridors,
-          event?.latlng?.lat ?? corridor.points[0][0],
-          event?.latlng?.lng ?? corridor.points[0][1],
+          clickLat,
+          clickLon,
         );
-        openCorridorDetails(nearbyRoutes.length > 0 ? nearbyRoutes : corridor.routeRefs);
+        openCorridorDetailsFromClick(nearbyRoutes.length > 0 ? nearbyRoutes : corridor.routeRefs, clickLat, clickLon);
       });
       routeLayer.addLayer(core);
       rendered.push(core);
@@ -1805,6 +2288,7 @@
         const shifted = offsetPolyline(corridor.points, offsetPixels);
         const routeColor = asCssRouteColor(routeRef.routeColor);
         const ribbon = L.polyline(shifted, {
+          pane: ROUTE_GEOMETRY_PANE,
           color: routeColor,
           weight: 2.1,
           opacity: 0,
@@ -1820,14 +2304,16 @@
           if (event?.originalEvent) {
             L.DomEvent.stopPropagation(event.originalEvent);
           }
+          const clickLat = event?.latlng?.lat ?? shifted[0][0];
+          const clickLon = event?.latlng?.lng ?? shifted[0][1];
           const nearbyRoutes = collectNearbyCorridorRoutes(
             sortedCorridors,
-            event?.latlng?.lat ?? shifted[0][0],
-            event?.latlng?.lng ?? shifted[0][1],
+            clickLat,
+            clickLon,
           );
           const candidateRoutes = nearbyRoutes.length > 0 ? nearbyRoutes : corridor.routeRefs;
           ribbon.setPopupContent(corridorPopupHtml(candidateRoutes));
-          openCorridorDetails(candidateRoutes);
+          openCorridorDetailsFromClick(candidateRoutes, clickLat, clickLon);
         });
         routeLayer.addLayer(ribbon);
         rendered.push(ribbon);
@@ -1835,6 +2321,7 @@
         if (renderMode === 'corridor' && index === 0 && corridor.routeCount >= 3) {
           const midpoint = shifted[Math.floor(shifted.length / 2)] ?? shifted[0];
           const badge = L.circleMarker(midpoint, {
+            pane: ROUTE_GEOMETRY_PANE,
             radius: 6.2,
             color: contrastColor(routeColor),
             weight: 1.4,
@@ -1870,6 +2357,7 @@
     if (selectedRouteKey && !routeSummaries.has(selectedRouteKey)) {
       selectedRouteKey = null;
       selectedRoute = null;
+      clearSelectedRouteStopOverlay({ redraw: false });
     } else if (selectedRouteKey) {
       selectedRoute = routeSummaries.get(selectedRouteKey) ?? null;
     }
@@ -1878,7 +2366,7 @@
       applySelectionStyles();
     });
 
-    if (!hasLoadedAtLeastOnce && renderedLayers.length > 0) {
+    if (shouldAutoFitInitialRoutes && !hasLoadedAtLeastOnce && renderedLayers.length > 0) {
       const bounds = L.featureGroup(renderedLayers.filter((layer) => typeof layer.getBounds === 'function')).getBounds();
       if (bounds.isValid()) {
         map.fitBounds(bounds.pad(0.06));
@@ -1894,15 +2382,21 @@
     visibleStopMarkersByKey = new Map();
     clearSidebarStopHover();
     latestVisibleStops = stops;
+    const activeRouteStopAccent = asCssRouteColor(routeDetails?.routeColor ?? selectedRoute?.routeColor);
     for (const stop of stops) {
-      const marker = L.circleMarker([stop.stopLat, stop.stopLon], {
-        radius: BASE_STOP_MARKER_RADIUS,
-        color: '#f8fafc',
-        weight: 1,
+      const selectionKey = stop.stopId ? stopSelectionKey(stop.feedVersionId, stop.stopId) : null;
+      const isSelectedRouteStop = selectionKey ? selectedRouteOverlayStopsByKey.has(selectionKey) : false;
+      const markerBaseStyle = {
+        pane: ROUTE_STOP_PANE,
+        radius: isSelectedRouteStop ? BASE_STOP_MARKER_RADIUS + 0.8 : BASE_STOP_MARKER_RADIUS,
+        color: isSelectedRouteStop ? activeRouteStopAccent : '#f8fafc',
+        weight: isSelectedRouteStop ? 2 : 1,
         fillColor: '#f8fafc',
         fillOpacity: 0.88,
         opacity: 0.9,
-      });
+      };
+      const marker = L.circleMarker([stop.stopLat, stop.stopLon], markerBaseStyle);
+      marker.__baseStopStyle = markerBaseStyle;
       visibleStopMarkersByKey.set(stopKey(stop), marker);
       if (stop.stopName) {
         const stopLabel = stop.wheelchairBoarding === 1 ? `${stop.stopName} ♿` : stop.stopName;
@@ -1920,63 +2414,10 @@
     initializeAnimationPaths(latestVisibleLines);
   }
 
-  function routeLimitForZoom(zoom: number) {
-    return zoom <= 11 ? 1200 : zoom <= 13 ? 1600 : 2000;
-  }
-
-  function shapeLimitForZoom(zoom: number) {
-    return zoom <= 9 ? 320 : zoom <= 13 ? 700 : 1200;
-  }
-
-  async function fetchRouteLinesForBbox(bbox: BboxRect, zoom: number, abortSignal: AbortSignal) {
-    const routeStart = performance.now();
-    const result = await graphqlRequest<{ mapRouteLines: MapRouteLinesPayload }>(
-      (input: RequestInfo | URL, init?: RequestInit) =>
-        fetch(input, {
-          ...init,
-          signal: abortSignal,
-        }),
-      `query MapRouteLines($bbox: String!, $zoom: Int!, $routeLimit: Int!, $shapeLimit: Int!) {
-        mapRouteLines(bbox: $bbox, zoom: $zoom, routeLimit: $routeLimit, shapeLimit: $shapeLimit)
-      }`,
-      {
-        bbox: bboxToString(bbox),
-        zoom,
-        routeLimit: routeLimitForZoom(zoom),
-        shapeLimit: shapeLimitForZoom(zoom),
-      },
-    );
-    const payload = result.mapRouteLines ?? {};
-    return {
-      payload,
-      elapsedMs: Math.round(performance.now() - routeStart),
-      payloadBytes: new Blob([JSON.stringify(payload)]).size,
-    };
-  }
-
-  async function fetchStopsForBbox(bbox: BboxRect, zoom: number, abortSignal: AbortSignal) {
-    const stopStart = performance.now();
-    const stopResult = await graphqlRequest<{ mapStops: { stops: StopPoint[] } }>(
-      (input: RequestInfo | URL, init?: RequestInit) =>
-        fetch(input, {
-          ...init,
-          signal: abortSignal,
-        }),
-      `query MapStops($bbox: String!, $zoom: Int!, $stopLimit: Int!) {
-        mapStops(bbox: $bbox, zoom: $zoom, stopLimit: $stopLimit)
-      }`,
-      { bbox: bboxToString(bbox), zoom, stopLimit: stopLimitForZoom(zoom) },
-    );
-    const payload = stopResult.mapStops ?? { stops: [] };
-    return {
-      payload,
-      elapsedMs: Math.round(performance.now() - stopStart),
-      payloadBytes: new Blob([JSON.stringify(payload)]).size,
-    };
-  }
-
   async function loadRouteDataFromViewport() {
     if (!map) return;
+    const requestStartedAt = performance.now();
+    lastRouteLoadStartedAt = requestStartedAt;
     const requestId = ++activeRequestId;
     inFlightAbort?.abort();
     inFlightAbort = new AbortController();
@@ -2034,15 +2475,12 @@
         }
         const incomingMode = routePayload.mode ?? (currentZoom <= 11 ? 'corridor' : currentZoom <= 14 ? 'mixed' : 'detailed');
         if (resolvedMode && incomingMode !== resolvedMode) {
-          // Reset if server-render mode changed while paging through bbox deltas.
+          // Keep one request cycle deterministic when mode changes mid-refresh.
           clearViewportCaches();
-          resolvedMode = null;
-          fetchBboxes = [fetchTargetBbox];
           routeTotalMs = 0;
           routeTotalBytes = 0;
           stopTotalMs = 0;
           stopTotalBytes = 0;
-          break;
         }
         resolvedMode = incomingMode;
         mergeLineCache(routePayload.lines ?? []);
@@ -2059,33 +2497,10 @@
         }
       }
 
-      if (resolvedMode === null) {
-        const routeResponse = await fetchRouteLinesForBbox(fetchTargetBbox, currentZoom, abortSignal);
-        if (requestId !== activeRequestId) return;
-        const routePayload = routeResponse.payload;
-        if ((routePayload.lines?.length ?? 0) >= activeShapeLimit || (routePayload.counts?.routes ?? 0) >= activeRouteLimit) {
-          cacheMayBeIncomplete = true;
-        }
-        resolvedMode = routePayload.mode ?? (currentZoom <= 11 ? 'corridor' : currentZoom <= 14 ? 'mixed' : 'detailed');
-        mergeLineCache(routePayload.lines ?? []);
-        mergeCorridorCache(routePayload.corridors ?? []);
-        routeTotalMs += routeResponse.elapsedMs;
-        routeTotalBytes += routeResponse.payloadBytes;
-
-        if (currentZoom >= MIN_STOP_RENDER_ZOOM) {
-          const stopResponse = await fetchStopsForBbox(fetchTargetBbox, currentZoom, abortSignal);
-          if (requestId !== activeRequestId) return;
-          mergeStopCache(stopResponse.payload.stops ?? []);
-          stopTotalMs += stopResponse.elapsedMs;
-          stopTotalBytes += stopResponse.payloadBytes;
-        }
-      }
-
       const nextMode = resolvedMode ?? (currentZoom <= 11 ? 'corridor' : currentZoom <= 14 ? 'mixed' : 'detailed');
       const linesToRender = cachedLinesSnapshot();
       const corridorsToRender = cachedCorridorsSnapshot();
-      const stopsToRender =
-        nextMode === 'corridor' || currentZoom < MIN_STOP_RENDER_ZOOM ? [] : cachedStopsSnapshotInBbox(viewportBbox);
+      const stopsToRender = renderedStopsForViewport(viewportBbox, nextMode);
       drawLines(linesToRender, corridorsToRender, nextMode);
       drawStops(stopsToRender);
       cacheMode = nextMode;
@@ -2093,7 +2508,7 @@
       lastViewportBbox = viewportBbox;
       incrementalPanCount = shouldForceFullReload ? 0 : incrementalPanCount + 1;
       modeLabel = `${zoomModeLabel(currentZoom)} | ${nextMode}`;
-      renderMetrics.routeLoadMs = routeTotalMs;
+      renderMetrics.routeLoadMs = Math.round(Math.max(routeTotalMs, performance.now() - requestStartedAt));
       renderMetrics.routePayloadBytes = routeTotalBytes;
       renderMetrics.stopLoadMs = stopTotalMs;
       renderMetrics.stopPayloadBytes = stopTotalBytes;
@@ -2119,9 +2534,13 @@
 
   function queueRefresh() {
     if (refreshTimer) clearTimeout(refreshTimer);
+    const elapsedSinceLastRequest = Math.max(0, performance.now() - lastRouteLoadStartedAt);
+    const throttleDelay = Math.max(0, ROUTE_REFRESH_MIN_INTERVAL_MS - elapsedSinceLastRequest);
+    const delayMs = Math.max(ROUTE_REFRESH_DEBOUNCE_MS, throttleDelay);
     refreshTimer = setTimeout(() => {
+      serializeMapHash();
       loadRouteDataFromViewport();
-    }, 250);
+    }, delayMs);
   }
 
   onMount(async () => {
@@ -2149,12 +2568,24 @@
     }).addTo(map);
     L.control.zoom({ position: 'bottomright' }).addTo(map);
 
+    map.createPane(ROUTE_GEOMETRY_PANE).style.zIndex = '410';
+    map.createPane(ROUTE_STOP_PANE).style.zIndex = '460';
+    map.createPane(ROUTE_ANIMATION_PANE).style.zIndex = '470';
+    map.createPane(REALTIME_VEHICLE_PANE).style.zIndex = '480';
+
     routeLayer = L.layerGroup().addTo(map);
     stopLayer = L.layerGroup().addTo(map);
     animationLayer = L.layerGroup().addTo(map);
     realtimeVehicleLayer = L.layerGroup().addTo(map);
-    const location = await detectLocationOrFallback();
-    map.setView([location.lat, location.lon], data.zoom);
+    const hashLocation = typeof window !== 'undefined' ? parseMapHash(window.location.hash) : null;
+    if (hashLocation) {
+      const clampedZoom = Math.max(5, Math.min(16, hashLocation.zoom));
+      map.setView([hashLocation.lat, hashLocation.lon], clampedZoom);
+      shouldAutoFitInitialRoutes = false;
+    } else {
+      const location = await detectLocationOrFallback();
+      map.setView([location.lat, location.lon], data.zoom);
+    }
 
     map.on('moveend', queueRefresh);
     map.on('zoomend', queueRefresh);
@@ -2316,7 +2747,83 @@
               <span class="meta-label">Directions</span>
               <strong class="meta-value">{routeDetails.counts?.directions ?? 0}</strong>
             </div>
+            {#if routeDetails.agency?.ridership}
+              <div class="meta-chip">
+                <span class="meta-label">Agency-wide trips ({routeDetails.agency.ridership.latestPassengerTripsMonth ?? 'n/a'})</span>
+                <strong class="meta-value">{formatRidershipFromThousands(routeDetails.agency.ridership.latestPassengerTripsThousands)}</strong>
+              </div>
+              <div class="meta-chip">
+                <span class="meta-label">Agency-wide revenue ({routeDetails.agency.ridership.latestRevenueMonth ?? 'n/a'})</span>
+                <strong class="meta-value">{formatRidershipFromThousands(routeDetails.agency.ridership.latestRevenueThousandsCad, { currency: true })}</strong>
+              </div>
+            {/if}
           </div>
+          {#if routeServiceStats && hasRouteServiceStatsData}
+            <div class="service-stats-wrap">
+              <span class="stop-list-title">Service supply ({formatServiceDate(routeServiceStats.serviceDate)})</span>
+              <div class="meta-grid service-stats-grid">
+                <div class="meta-chip">
+                  <span class="meta-label">Scheduled trips</span>
+                  <strong class="meta-value">{formatCount(routeServiceStats.scheduledTrips)}</strong>
+                </div>
+                <div class="meta-chip">
+                  <span class="meta-label">Span of service</span>
+                  <strong class="meta-value">
+                    {routeServiceStats.spanOfService.firstDeparture ?? 'n/a'} - {routeServiceStats.spanOfService.lastDeparture ?? 'n/a'}
+                  </strong>
+                </div>
+                <div class="meta-chip">
+                  <span class="meta-label">Service-hours (approx)</span>
+                  <strong class="meta-value">{formatDecimal(routeServiceStats.supply.serviceHoursApprox, 2)} h</strong>
+                </div>
+                <div class="meta-chip">
+                  <span class="meta-label">Service-km (approx)</span>
+                  <strong class="meta-value">{formatDecimal(routeServiceStats.supply.serviceKmApprox, 2)} km</strong>
+                </div>
+                <div class="meta-chip">
+                  <span class="meta-label">VRH-ish</span>
+                  <strong class="meta-value">{formatDecimal(routeServiceStats.supply.vrhApprox, 2)} h</strong>
+                </div>
+                <div class="meta-chip">
+                  <span class="meta-label">VRK-ish</span>
+                  <strong class="meta-value">{formatDecimal(routeServiceStats.supply.vrkApprox, 2)} km</strong>
+                </div>
+                <div class="meta-chip">
+                  <span class="meta-label">Route coverage</span>
+                  <strong class="meta-value">{formatDecimal(routeServiceStats.stopCoverage.routeCoverageKm, 2)} km</strong>
+                </div>
+                <div class="meta-chip">
+                  <span class="meta-label">Stop density</span>
+                  <strong class="meta-value">
+                    {routeServiceStats.stopCoverage.stopsPerKm === null ? 'n/a' : `${formatDecimal(routeServiceStats.stopCoverage.stopsPerKm, 2)} stops/km`}
+                  </strong>
+                </div>
+              </div>
+              <div class="service-chart-grid">
+                {#if headwayChartConfig}
+                  <div class="service-chart-card">
+                    <span class="meta-label">Headways by time band</span>
+                    <MetricChart config={headwayChartConfig} title="Headways by time band" height={250} />
+                  </div>
+                {/if}
+                {#if supplyChartConfig}
+                  <div class="service-chart-card">
+                    <span class="meta-label">Service supply comparison</span>
+                    <MetricChart config={supplyChartConfig} title="Service supply comparison" height={220} />
+                  </div>
+                {/if}
+                {#if distanceQualityChartConfig}
+                  <div class="service-chart-card">
+                    <span class="meta-label">Distance source quality</span>
+                    <MetricChart config={distanceQualityChartConfig} title="Distance source quality" height={220} />
+                  </div>
+                {/if}
+              </div>
+              {#if routeServiceStats.methodology.notes.length > 0}
+                <p class="detail-copy">Methodology: {routeServiceStats.methodology.notes.join(' ')}</p>
+              {/if}
+            </div>
+          {/if}
           {#if routeDetails.routeDesc}
             <p class="detail-copy">{routeDetails.routeDesc}</p>
           {/if}
@@ -2424,6 +2931,16 @@
               <div class="meta-chip">
                 <span class="meta-label">Accessibility</span>
                 <strong class="meta-value">♿ Accessible</strong>
+              </div>
+            {/if}
+            {#if stopDetails.agency?.ridership}
+              <div class="meta-chip">
+                <span class="meta-label">Agency-wide trips ({stopDetails.agency.ridership.latestPassengerTripsMonth ?? 'n/a'})</span>
+                <strong class="meta-value">{formatRidershipFromThousands(stopDetails.agency.ridership.latestPassengerTripsThousands)}</strong>
+              </div>
+              <div class="meta-chip">
+                <span class="meta-label">Agency-wide revenue ({stopDetails.agency.ridership.latestRevenueMonth ?? 'n/a'})</span>
+                <strong class="meta-value">{formatRidershipFromThousands(stopDetails.agency.ridership.latestRevenueThousandsCad, { currency: true })}</strong>
               </div>
             {/if}
           </div>
@@ -2770,6 +3287,30 @@
     gap: 0.45rem;
   }
 
+  .service-stats-wrap {
+    display: grid;
+    gap: 0.6rem;
+    margin-top: 0.2rem;
+  }
+
+  .service-stats-grid {
+    margin-top: 0.1rem;
+  }
+
+  .service-chart-grid {
+    display: grid;
+    gap: 0.5rem;
+  }
+
+  .service-chart-card {
+    border: 1px solid rgba(96, 146, 226, 0.26);
+    border-radius: 0.62rem;
+    background: rgba(8, 20, 39, 0.66);
+    padding: 0.45rem 0.5rem;
+    display: grid;
+    gap: 0.4rem;
+  }
+
   .meta-chip {
     border: 1px solid rgba(134, 170, 228, 0.26);
     border-radius: 0.6rem;
@@ -2981,5 +3522,99 @@
     transition:
       opacity 220ms ease,
       stroke-width 220ms ease;
+  }
+
+  :global(.vehicle-icon-shell) {
+    background: transparent;
+    border: none;
+  }
+
+  :global(.vehicle-marker) {
+    width: 24px;
+    height: 24px;
+    border-radius: 999px;
+    border: 1px solid rgba(241, 245, 249, 0.95);
+    background: var(--vehicle-color, #f4d73f);
+    color: var(--vehicle-text, #0f172a);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.55), 0 2px 8px rgba(2, 6, 23, 0.45);
+    line-height: 1;
+  }
+
+  :global(.vehicle-marker__glyph) {
+    font-size: 12px;
+    transform: translateY(0.5px);
+  }
+
+  :global(.vehicle-marker--bus) {
+    filter: saturate(1.02);
+  }
+
+  :global(.vehicle-marker--tram) {
+    filter: saturate(1.08);
+  }
+
+  :global(.vehicle-marker--subway) {
+    filter: saturate(1.12);
+  }
+
+  :global(.vehicle-marker--rail) {
+    filter: saturate(1.08);
+  }
+
+  :global(.vehicle-marker--ferry) {
+    filter: saturate(1.04);
+  }
+
+  :global(.vehicle-tooltip .leaflet-tooltip-content) {
+    margin: 0;
+  }
+
+  :global(.vehicle-tooltip.leaflet-tooltip) {
+    background: rgba(7, 18, 38, 0.96);
+    border: 1px solid rgba(125, 170, 245, 0.65);
+    color: #eaf2ff;
+    box-shadow: 0 8px 20px rgba(2, 6, 23, 0.52);
+    border-radius: 0.5rem;
+    padding: 0.42rem 0.5rem;
+  }
+
+  :global(.vehicle-tooltip.leaflet-tooltip-top:before) {
+    border-top-color: rgba(7, 18, 38, 0.96);
+  }
+
+  :global(.vehicle-tooltip.leaflet-tooltip-bottom:before) {
+    border-bottom-color: rgba(7, 18, 38, 0.96);
+  }
+
+  :global(.vehicle-tooltip.leaflet-tooltip-left:before) {
+    border-left-color: rgba(7, 18, 38, 0.96);
+  }
+
+  :global(.vehicle-tooltip.leaflet-tooltip-right:before) {
+    border-right-color: rgba(7, 18, 38, 0.96);
+  }
+
+  :global(.vehicle-tooltip-card) {
+    display: grid;
+    gap: 0.24rem;
+    min-width: 14rem;
+    color: #e4efff;
+    font-size: 0.77rem;
+    line-height: 1.25;
+    text-shadow: 0 1px 0 rgba(2, 6, 23, 0.45);
+  }
+
+  :global(.vehicle-tooltip-title) {
+    color: #ffffff;
+    font-size: 0.82rem;
+    font-weight: 700;
+  }
+
+  :global(.vehicle-tooltip-label) {
+    color: #93c5fd;
+    font-weight: 700;
   }
 </style>

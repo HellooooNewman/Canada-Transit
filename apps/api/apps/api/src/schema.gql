@@ -14,6 +14,7 @@ type Query {
   mapStops(bbox: String!, zoom: Int = 11, stopLimit: Int = 3000): JSON!
   mapRouteLines(bbox: String!, zoom: Int = 10, routeLimit: Int = 1200, shapeLimit: Int = 300): JSON!
   mapRouteDetails(feedVersionId: String!, routeId: String!): JSON!
+  mapRouteServiceStats(feedVersionId: String!, routeId: String!, serviceDate: String): JSON!
   mapStopDetails(feedVersionId: String!, stopId: String!): JSON!
   mapRouteRealtime(feedVersionId: String!, routeId: String!, agencySlug: String): JSON!
   agencyRealtimeHealth(slug: String!): JSON!

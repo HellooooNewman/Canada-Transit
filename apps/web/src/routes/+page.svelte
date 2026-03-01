@@ -32,6 +32,12 @@
     search = '';
     province = 'all';
   }
+
+  function formatThousands(value: unknown, suffix = '') {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return 'n/a';
+    return `${numeric.toLocaleString(undefined, { maximumFractionDigits: 1 })}${suffix}`;
+  }
 </script>
 
 <svelte:head>
@@ -80,6 +86,20 @@
             <span><small>Slug</small>{agency.slug}</span>
             <span><small>Timezone</small>{agency.timezone ?? 'n/a'}</span>
             <span><small>Country</small>{agency.countryCode ?? 'n/a'}</span>
+            {#if agency.ridership}
+              <span>
+                <small>Latest trips ({agency.ridership.latestPassengerTripsMonth ?? 'n/a'})</small>
+                {formatThousands(agency.ridership.latestPassengerTripsThousands, 'k')}
+              </span>
+              <span>
+                <small>Latest revenue ({agency.ridership.latestRevenueMonth ?? 'n/a'})</small>
+                ${formatThousands(agency.ridership.latestRevenueThousandsCad, 'k CAD')}
+              </span>
+              <span>
+                <small>Ridership source</small>
+                StatsCan table {agency.ridership.sourceTableId}
+              </span>
+            {/if}
           </div>
         </article>
       {/each}

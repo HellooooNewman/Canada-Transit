@@ -115,6 +115,15 @@ export class GtfsResolver {
     return this.gtfsService.getMapRouteDetails({ feedVersionId, routeId });
   }
 
+  @Query(() => GraphQLJSON, { name: 'mapRouteServiceStats' })
+  mapRouteServiceStats(
+    @Args('feedVersionId', { type: () => String }) feedVersionId: string,
+    @Args('routeId', { type: () => String }) routeId: string,
+    @Args('serviceDate', { type: () => String, nullable: true }) serviceDate?: string,
+  ) {
+    return this.gtfsService.getMapRouteServiceStats({ feedVersionId, routeId, serviceDate });
+  }
+
   @Query(() => GraphQLJSON, { name: 'mapStopDetails' })
   mapStopDetails(
     @Args('feedVersionId', { type: () => String }) feedVersionId: string,
