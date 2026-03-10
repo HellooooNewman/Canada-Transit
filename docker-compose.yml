@@ -31,7 +31,7 @@ services:
     ports:
       - '3000:3000'
     volumes:
-      - ./prisma/data/census/2021:/data/census/2021:ro
+      - ./prisma/data:/data:ro
     depends_on:
       - postgres
 
