@@ -57,22 +57,22 @@
   }
 
   .hero {
-    border: 1px solid #24324a;
+    border: 1px solid var(--border-primary);
     border-radius: 0.75rem;
-    background: linear-gradient(135deg, #0e1a31, #111d38);
+    background: var(--surface-1);
     padding: 1rem 1.1rem;
     margin-bottom: 1rem;
   }
 
   .hero p {
     margin-top: 0.4rem;
-    color: #b8c8eb;
+    color: var(--text-secondary);
   }
 
   .panel {
-    border: 1px solid #273856;
+    border: 1px solid var(--border-primary);
     border-radius: 0.8rem;
-    background: linear-gradient(180deg, #0e1a31 0%, #0a1425 100%);
+    background: var(--surface-2);
     overflow: hidden;
   }
 
@@ -80,11 +80,11 @@
     display: flex;
     justify-content: space-between;
     padding: 0.8rem 0.9rem;
-    border-bottom: 1px solid #22314b;
+    border-bottom: 1px solid var(--border-primary);
   }
 
   .panel-header span {
-    color: #9bb0df;
+    color: var(--text-muted);
     font-size: 0.78rem;
   }
 
@@ -99,30 +99,30 @@
     display: flex;
     flex-direction: column;
     gap: 0.25rem;
-    border: 1px solid #283a5a;
+    border: 1px solid var(--border-primary);
     border-radius: 0.56rem;
     padding: 0.65rem;
-    background: linear-gradient(180deg, #111e36 0%, #0f1a2f 100%);
+    background: var(--surface-3);
   }
 
   .card span {
-    color: #adc0ea;
+    color: var(--text-secondary);
     font-size: 0.86rem;
   }
 
   a {
-    color: #8ab0ff;
+    color: var(--link);
     text-decoration: none;
     overflow-wrap: anywhere;
   }
 
   .notice {
     margin-top: 1rem;
-    border: 1px solid #2a3955;
+    border: 1px solid var(--border-primary);
     border-radius: 0.7rem;
-    background: #0e1a30;
+    background: var(--surface-2);
     padding: 0.75rem 0.9rem;
-    color: #aec1eb;
+    color: var(--text-secondary);
     font-size: 0.85rem;
     line-height: 1.4;
   }

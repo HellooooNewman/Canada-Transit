@@ -1,8 +1,13 @@
 <script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte';
   import type { ChartConfiguration } from 'chart.js';
-  import { graphqlRequest } from '$lib/api';
-  import { fetchRouteLinesForBbox, fetchStopsForBbox, routeLimitForZoom, shapeLimitForZoom } from './map-data-client';
+  import { apiUrl, graphqlRequest } from '$lib/api';
+  import {
+    fetchRouteLinesForBbox,
+    fetchStopsForBbox,
+    routeLimitForZoom,
+    shapeLimitForZoom,
+  } from './map-data-client';
   import MetricChart from '$lib/components/metric-chart.svelte';
   import { buildDoughnutChartConfig, buildHorizontalBarChartConfig } from '$lib/charts/theme';
   import 'leaflet/dist/leaflet.css';
@@ -94,6 +99,26 @@
     latestRevenueMonth?: string | null;
   };
 
+  type CensusContext = {
+    boundaryGeometry?: {
+      type: 'Polygon' | 'MultiPolygon';
+      coordinates: number[][][] | number[][][][];
+    } | null;
+    geographyLevel: 'dissemination_area';
+    source: string;
+    censusYear?: number;
+    dguid?: string | null;
+    dauid?: string | null;
+    provinceCode?: string | null;
+    provinceName?: string | null;
+    name?: string | null;
+    landAreaSqKm?: number | null;
+    population?: number | null;
+    privateDwellings?: number | null;
+    populationDensityPerSqKm?: number | null;
+    populationSource?: string | null;
+  };
+
   type RouteDetails = {
     feedVersionId: string;
     routeId: string;
@@ -113,6 +138,7 @@
       timezone?: string | null;
       ridership?: AgencyRidership | null;
     } | null;
+    censusContext?: CensusContext | null;
     counts?: {
       trips: number;
       distinctStops: number;
@@ -205,6 +231,7 @@
       timezone?: string | null;
       ridership?: AgencyRidership | null;
     } | null;
+    censusContext?: CensusContext | null;
     counts?: {
       trips: number;
       routes: number;
@@ -344,6 +371,27 @@
     notes?: string | null;
   };
 
+  type TransitHeatHealth = {
+    versionKey: string | null;
+    tileCount: number;
+    minZoom: number | null;
+    maxZoom: number | null;
+    generatedAt: string | null;
+    tilesByZoom: Array<{ zoom: number; tiles: number }>;
+  };
+
+  type PopulationHeatHealth = {
+    versionKey: string | null;
+    gridSize: number;
+    minZoom: number;
+    maxZoom: number;
+    polygonCount: number;
+    polygonsWithPopulation: number;
+    maxDensityScale: number;
+    source: string;
+    generatedAt: string;
+  };
+
   export let data: {
     center: { lat: number; lon: number };
     zoom: number;
@@ -352,14 +400,21 @@
 
   const TORONTO_CENTER = { lat: 43.6532, lon: -79.3832 };
   const DARK_TILE_URL = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
-  const DARK_TILE_ATTRIBUTION =
-    '&copy; OpenStreetMap contributors &copy; CARTO';
+  const LIGHT_TILE_URL = 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
+  const TILE_ATTRIBUTION = '&copy; OpenStreetMap contributors &copy; CARTO';
   const FALLBACK_COLORS = ['#f59e0b', '#60a5fa', '#34d399', '#c084fc', '#fb7185', '#22d3ee'];
   const VEHICLE_ANIMATION_STORAGE_KEY = 'map.animateVehicleMarker';
   const BASE_STOP_MARKER_RADIUS = 2.9;
   const HOVER_STOP_MARKER_RADIUS = 6.2;
   const MIN_STOP_RENDER_ZOOM = 15;
+  const TRANSIT_HEAT_STORAGE_KEY = 'map.transitHeatEnabled';
+  const TRANSIT_HEAT_LEGEND_COLLAPSED_STORAGE_KEY = 'map.transitHeatLegendCollapsed';
+  const POPULATION_HEAT_STORAGE_KEY = 'map.populationHeatEnabled';
+  const POPULATION_HEAT_LEGEND_COLLAPSED_STORAGE_KEY = 'map.populationHeatLegendCollapsed';
   const ROUTE_GEOMETRY_PANE = 'routeGeometryPane';
+  const TRANSIT_HEAT_PANE = 'transitHeatPane';
+  const POPULATION_HEAT_PANE = 'populationHeatPane';
+  const CENSUS_BOUNDARY_PANE = 'censusBoundaryPane';
   const ROUTE_STOP_PANE = 'routeStopPane';
   const ROUTE_ANIMATION_PANE = 'routeAnimationPane';
   const REALTIME_VEHICLE_PANE = 'realtimeVehiclePane';
@@ -370,6 +425,7 @@
 
   let mapEl: HTMLDivElement;
   let sidebarEl: HTMLDivElement | null = null;
+  let sidebarHeaderPinned = false;
   let loading = false;
   let error = '';
   let modeLabel = 'Rail focus';
@@ -388,7 +444,11 @@
 
   let L: any;
   let map: any;
+  let baseTileLayer: any;
   let routeLayer: any;
+  let transitHeatLayer: any;
+  let populationHeatLayer: any;
+  let censusBoundaryLayer: any;
   let stopLayer: any;
   let animationLayer: any;
   let realtimeVehicleLayer: any;
@@ -407,6 +467,16 @@
     startAt: number;
   }> = [];
   let animateVehicles = true;
+  let transitHeatEnabled = true;
+  let transitHeatLegendCollapsed = false;
+  let transitHeatVersionKey: string | null = null;
+  let transitHeatHealth: TransitHeatHealth | null = null;
+  let transitHeatHealthError = '';
+  let populationHeatEnabled = false;
+  let populationHeatLegendCollapsed = false;
+  let populationHeatVersionKey: string | null = null;
+  let populationHeatHealth: PopulationHeatHealth | null = null;
+  let populationHeatHealthError = '';
   let latestVisibleLines: RouteLine[] = [];
   let latestVisibleStops: StopPoint[] = [];
   let refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -472,6 +542,7 @@
   let supplyChartConfig: ChartConfiguration<'bar'> | null = null;
   let distanceQualityChartConfig: ChartConfiguration<'doughnut'> | null = null;
   let hasRouteServiceStatsData = false;
+  let mapThemeObserver: MutationObserver | null = null;
 
   const MODE_HYSTERESIS_ZOOM = 1;
   const MAX_INCREMENTAL_PANS = 12;
@@ -724,6 +795,7 @@
 
   function closeDetails() {
     detailKind = null;
+    sidebarHeaderPinned = false;
     detailLoading = false;
     detailError = '';
     routeDetails = null;
@@ -738,6 +810,7 @@
     selectedRoute = null;
     selectedRouteKey = null;
     clearSelectedRouteStopOverlay();
+    clearCensusBoundaryOverlay();
     detailsAbort?.abort();
     routeRealtimeAbort?.abort();
     clearRealtimeVehicleMarkers();
@@ -745,6 +818,48 @@
     applySelectionStyles();
     pendingRouteScrollStopId = null;
     clearSidebarStopHover();
+  }
+
+  function activeCensusContext() {
+    // Route-level context requires aggregating all DAs intersected by the route geometry.
+    // Until that exists, only show census boundary overlay for stop selections.
+    if (detailKind === 'stop') return stopDetails?.censusContext ?? null;
+    return null;
+  }
+
+  function clearCensusBoundaryOverlay() {
+    if (!censusBoundaryLayer || !map) return;
+    if (typeof map.hasLayer === 'function' && map.hasLayer(censusBoundaryLayer)) {
+      map.removeLayer(censusBoundaryLayer);
+    }
+    censusBoundaryLayer = null;
+  }
+
+  function syncCensusBoundaryOverlay() {
+    if (!L || !map) return;
+    clearCensusBoundaryOverlay();
+    const context = activeCensusContext();
+    const geometry = context?.boundaryGeometry;
+    if (!geometry) return;
+    censusBoundaryLayer = L.geoJSON(
+      { type: 'Feature', geometry, properties: {} },
+      {
+        pane: CENSUS_BOUNDARY_PANE,
+        style: {
+          color: '#f59e0b',
+          weight: 2,
+          opacity: 0.95,
+          fillColor: '#f59e0b',
+          fillOpacity: 0.14,
+        },
+      },
+    );
+    censusBoundaryLayer.addTo(map);
+  }
+
+  function handleSidebarScroll(event: Event) {
+    const target = event.currentTarget as HTMLDivElement | null;
+    sidebarHeaderPinned = (target?.scrollTop ?? 0) > 8;
   }
 
   function stopSelectionKey(feedVersionId: string, stopId: string) {
@@ -905,6 +1020,7 @@
     stopRealtime = null;
     detailError = '';
     detailLoading = true;
+    clearCensusBoundaryOverlay();
     const selectedStopId = selectedStop?.stopId ?? null;
     selectedStop = null;
     if (selectedStopId) {
@@ -918,6 +1034,7 @@
       agencyRealtimeHealth = cached.agencyRealtimeHealth;
       detailLoading = false;
       syncRealtimeVehicleMarkers();
+      syncCensusBoundaryOverlay();
       initializeAnimationPaths(latestVisibleLines);
       void ensureSelectedRouteStopsVisible(summary, routeDetails);
       if (pendingRouteScrollStopId) {
@@ -966,6 +1083,7 @@
         agencyRealtimeHealth,
       });
       syncRealtimeVehicleMarkers();
+      syncCensusBoundaryOverlay();
       initializeAnimationPaths(latestVisibleLines);
       void ensureSelectedRouteStopsVisible(summary, routeDetails);
       if (!routeDetails) {
@@ -1018,12 +1136,14 @@
     canReturnToCorridor = false;
     detailError = '';
     detailLoading = true;
+    clearCensusBoundaryOverlay();
     const cached = stopDetailsCache.get(stopKey);
     if (cached) {
       stopDetails = cached.stopDetails;
       stopRealtime = cached.stopRealtime;
       agencyRealtimeHealth = cached.agencyRealtimeHealth;
       detailLoading = false;
+      syncCensusBoundaryOverlay();
       if (!stopDetails) {
         detailError = 'No additional stop details found.';
       }
@@ -1064,6 +1184,7 @@
         stopRealtime,
         agencyRealtimeHealth,
       });
+      syncCensusBoundaryOverlay();
       if (!stopDetails) {
         detailError = 'No additional stop details found.';
       }
@@ -1516,6 +1637,100 @@
     initializeAnimationPaths(latestVisibleLines);
   }
 
+  function onToggleTransitHeat(event: Event) {
+    const target = event.currentTarget as HTMLInputElement;
+    transitHeatEnabled = target.checked;
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(TRANSIT_HEAT_STORAGE_KEY, transitHeatEnabled ? '1' : '0');
+    }
+    if (!map || !transitHeatLayer) return;
+    if (transitHeatEnabled) {
+      transitHeatLayer.addTo(map);
+      if (!transitHeatHealth && !transitHeatHealthError) {
+        void loadTransitHeatHealth();
+      }
+    } else if (map.hasLayer(transitHeatLayer)) {
+      map.removeLayer(transitHeatLayer);
+    }
+    if (populationHeatLayer && map.hasLayer(populationHeatLayer) && typeof populationHeatLayer.redraw === 'function') {
+      populationHeatLayer.redraw();
+    }
+  }
+
+  function onToggleTransitHeatLegend() {
+    transitHeatLegendCollapsed = !transitHeatLegendCollapsed;
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(TRANSIT_HEAT_LEGEND_COLLAPSED_STORAGE_KEY, transitHeatLegendCollapsed ? '1' : '0');
+    }
+  }
+
+  async function loadTransitHeatHealth() {
+    try {
+      transitHeatHealthError = '';
+      const response = await fetch(apiUrl('/map/transit-heat/health'));
+      if (!response.ok) {
+        throw new Error(`Heat health request failed (${response.status})`);
+      }
+      const payload = (await response.json()) as TransitHeatHealth;
+      transitHeatHealth = payload;
+      transitHeatVersionKey = payload.versionKey ?? null;
+      if (map && transitHeatLayer && map.hasLayer(transitHeatLayer) && typeof transitHeatLayer.redraw === 'function') {
+        // Refresh URLs once we have a concrete version key for cache-busted tile requests.
+        transitHeatLayer.redraw();
+      }
+    } catch (err) {
+      transitHeatHealthError = err instanceof Error ? err.message : 'Unable to load heat health';
+    }
+  }
+
+  function onTogglePopulationHeat(event: Event) {
+    const target = event.currentTarget as HTMLInputElement;
+    populationHeatEnabled = target.checked;
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(POPULATION_HEAT_STORAGE_KEY, populationHeatEnabled ? '1' : '0');
+    }
+    if (!map || !populationHeatLayer) return;
+    if (populationHeatEnabled) {
+      populationHeatLayer.addTo(map);
+      if (!populationHeatHealth && !populationHeatHealthError) {
+        void loadPopulationHeatHealth();
+      }
+    } else if (map.hasLayer(populationHeatLayer)) {
+      map.removeLayer(populationHeatLayer);
+    }
+  }
+
+  function onTogglePopulationHeatLegend() {
+    populationHeatLegendCollapsed = !populationHeatLegendCollapsed;
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(POPULATION_HEAT_LEGEND_COLLAPSED_STORAGE_KEY, populationHeatLegendCollapsed ? '1' : '0');
+    }
+  }
+
+  async function loadPopulationHeatHealth() {
+    try {
+      populationHeatHealthError = '';
+      const response = await fetch(apiUrl('/map/population-heat/health'));
+      if (!response.ok) {
+        throw new Error(`Population heat health request failed (${response.status})`);
+      }
+      const payload = (await response.json()) as PopulationHeatHealth;
+      populationHeatHealth = payload;
+      populationHeatVersionKey = payload.versionKey ?? null;
+      if (map && populationHeatLayer && map.hasLayer(populationHeatLayer) && typeof populationHeatLayer.redraw === 'function') {
+        populationHeatLayer.redraw();
+      }
+    } catch (err) {
+      populationHeatHealthError = err instanceof Error ? err.message : 'Unable to load population heat metadata';
+    }
+  }
+
+  function heatVersionLabel(versionKey: string | null | undefined) {
+    if (!versionKey) return 'n/a';
+    if (versionKey.length <= 18) return versionKey;
+    return `${versionKey.slice(0, 14)}...`;
+  }
+
   async function refreshSelectedRouteRealtime() {
     if (!selectedRoute || detailKind !== 'route') return;
     const requestId = ++activeRealtimeRequestId;
@@ -1570,6 +1785,25 @@
     if (!Number.isFinite(zoom) || !Number.isFinite(lat) || !Number.isFinite(lon)) return null;
     if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return null;
     return { zoom, lat, lon };
+  }
+
+  function isLightTheme() {
+    if (typeof document === 'undefined') return false;
+    return document.documentElement.dataset.theme === 'light';
+  }
+
+  function syncBasemapTheme() {
+    if (!L || !map) return;
+    const tileUrl = isLightTheme() ? LIGHT_TILE_URL : DARK_TILE_URL;
+    if (baseTileLayer) {
+      map.removeLayer(baseTileLayer);
+    }
+    baseTileLayer = L.tileLayer(tileUrl, {
+      subdomains: 'abcd',
+      maxZoom: 19,
+      attribution: TILE_ATTRIBUTION,
+    });
+    baseTileLayer.addTo(map);
   }
 
   function serializeMapHash() {
@@ -2104,6 +2338,7 @@
     routeDetails = null;
     routeServiceStats = null;
     stopDetails = null;
+    clearCensusBoundaryOverlay();
     selectedStop = null;
     corridorDetailRoutes = displayRoutes;
     canReturnToCorridor = false;
@@ -2171,6 +2406,7 @@
     routeDetails = null;
     routeServiceStats = null;
     stopDetails = null;
+    clearCensusBoundaryOverlay();
     canReturnToCorridor = false;
   }
 
@@ -2376,6 +2612,160 @@
     initializeAnimationPaths(sortedLines);
   }
 
+  function heatColorForIntensity(intensity: number) {
+    const clamped = Math.max(0, Math.min(1, intensity));
+    if (clamped < 0.2) {
+      const t = clamped / 0.2;
+      return `rgb(${Math.round(18 + 30 * t)}, ${Math.round(76 + 84 * t)}, ${Math.round(210 + 24 * t)})`;
+    }
+    if (clamped < 0.45) {
+      const t = (clamped - 0.2) / 0.25;
+      return `rgb(${Math.round(48 + 54 * t)}, ${Math.round(160 + 56 * t)}, ${Math.round(234 - 110 * t)})`;
+    }
+    if (clamped < 0.72) {
+      const t = (clamped - 0.45) / 0.27;
+      return `rgb(${Math.round(102 + 120 * t)}, ${Math.round(216 - 16 * t)}, ${Math.round(124 - 78 * t)})`;
+    }
+    const t = (clamped - 0.72) / 0.28;
+    return `rgb(${Math.round(222 + 20 * t)}, ${Math.round(200 - 148 * t)}, ${Math.round(46 - 30 * t)})`;
+  }
+
+  function populationHeatColorForIntensity(intensity: number) {
+    const clamped = Math.max(0, Math.min(1, intensity));
+    if (clamped < 0.24) {
+      const t = clamped / 0.24;
+      return `rgb(${Math.round(24 + 28 * t)}, ${Math.round(58 + 34 * t)}, ${Math.round(124 + 62 * t)})`;
+    }
+    if (clamped < 0.5) {
+      const t = (clamped - 0.24) / 0.26;
+      return `rgb(${Math.round(52 + 74 * t)}, ${Math.round(92 + 42 * t)}, ${Math.round(186 + 28 * t)})`;
+    }
+    if (clamped < 0.78) {
+      const t = (clamped - 0.5) / 0.28;
+      return `rgb(${Math.round(126 + 68 * t)}, ${Math.round(134 + 26 * t)}, ${Math.round(214 - 58 * t)})`;
+    }
+    const t = (clamped - 0.78) / 0.22;
+    return `rgb(${Math.round(194 + 34 * t)}, ${Math.round(160 - 76 * t)}, ${Math.round(156 - 80 * t)})`;
+  }
+
+  function createTransitHeatTileLayer() {
+    const gridLayer = L.gridLayer({
+      pane: TRANSIT_HEAT_PANE,
+      tileSize: 256,
+      updateWhenIdle: true,
+      keepBuffer: 2,
+    });
+    gridLayer.createTile = (coords: { x: number; y: number; z: number }, done: (error: Error | null, tile: HTMLElement) => void) => {
+      const tile = L.DomUtil.create('canvas', 'leaflet-tile') as HTMLCanvasElement;
+      tile.width = 256;
+      tile.height = 256;
+      const ctx = tile.getContext('2d');
+      if (!ctx) {
+        done(null, tile);
+        return tile;
+      }
+      ctx.clearRect(0, 0, tile.width, tile.height);
+      const versionQuery = transitHeatVersionKey ? `?v=${encodeURIComponent(transitHeatVersionKey)}` : '';
+      void fetch(apiUrl(`/map/transit-heat/${coords.z}/${coords.x}/${coords.y}.bin${versionQuery}`))
+        .then(async (response) => {
+          if (!response.ok || response.status === 204) return null;
+          const buffer = await response.arrayBuffer();
+          return new Uint8Array(buffer);
+        })
+        .then((bins) => {
+          if (!bins || bins.length === 0) {
+            done(null, tile);
+            return;
+          }
+          const gridSize = Math.round(Math.sqrt(bins.length));
+          if (!Number.isFinite(gridSize) || gridSize <= 0 || gridSize * gridSize !== bins.length) {
+            done(null, tile);
+            return;
+          }
+          const cellSize = tile.width / gridSize;
+          ctx.imageSmoothingEnabled = true;
+          for (let row = 0; row < gridSize; row += 1) {
+            for (let col = 0; col < gridSize; col += 1) {
+              const raw = bins[row * gridSize + col] ?? 0;
+              if (raw <= 0) continue;
+              const intensity = raw / 255;
+              const zoomOpacityScale = coords.z <= 8 ? 1.28 : coords.z <= 11 ? 1.16 : coords.z >= 15 ? 0.72 : 0.88;
+              const baseAlpha = 0.065 + intensity * 0.67;
+              ctx.globalAlpha = Math.max(0.03, Math.min(0.9, baseAlpha * zoomOpacityScale));
+              ctx.fillStyle = heatColorForIntensity(intensity);
+              ctx.fillRect(col * cellSize, row * cellSize, cellSize + 0.6, cellSize + 0.6);
+            }
+          }
+          ctx.globalAlpha = 1;
+          done(null, tile);
+        })
+        .catch(() => {
+          done(null, tile);
+        });
+      return tile;
+    };
+    return gridLayer;
+  }
+
+  function createPopulationHeatTileLayer() {
+    const gridLayer = L.gridLayer({
+      pane: POPULATION_HEAT_PANE,
+      tileSize: 256,
+      updateWhenIdle: true,
+      keepBuffer: 2,
+    });
+    gridLayer.createTile = (coords: { x: number; y: number; z: number }, done: (error: Error | null, tile: HTMLElement) => void) => {
+      const tile = L.DomUtil.create('canvas', 'leaflet-tile') as HTMLCanvasElement;
+      tile.width = 256;
+      tile.height = 256;
+      const ctx = tile.getContext('2d');
+      if (!ctx) {
+        done(null, tile);
+        return tile;
+      }
+      ctx.clearRect(0, 0, tile.width, tile.height);
+      const versionQuery = populationHeatVersionKey ? `?v=${encodeURIComponent(populationHeatVersionKey)}` : '';
+      void fetch(apiUrl(`/map/population-heat/${coords.z}/${coords.x}/${coords.y}.bin${versionQuery}`))
+        .then(async (response) => {
+          if (!response.ok || response.status === 204) return null;
+          const buffer = await response.arrayBuffer();
+          return new Uint8Array(buffer);
+        })
+        .then((bins) => {
+          if (!bins || bins.length === 0) {
+            done(null, tile);
+            return;
+          }
+          const gridSize = Math.round(Math.sqrt(bins.length));
+          if (!Number.isFinite(gridSize) || gridSize <= 0 || gridSize * gridSize !== bins.length) {
+            done(null, tile);
+            return;
+          }
+          const cellSize = tile.width / gridSize;
+          ctx.imageSmoothingEnabled = true;
+          for (let row = 0; row < gridSize; row += 1) {
+            for (let col = 0; col < gridSize; col += 1) {
+              const raw = bins[row * gridSize + col] ?? 0;
+              if (raw <= 0) continue;
+              const intensity = raw / 255;
+              const comparisonScale = transitHeatEnabled ? 0.86 : 1;
+              const baseAlpha = 0.055 + intensity * 0.54;
+              ctx.globalAlpha = Math.max(0.03, Math.min(0.78, baseAlpha * comparisonScale));
+              ctx.fillStyle = populationHeatColorForIntensity(intensity);
+              ctx.fillRect(col * cellSize, row * cellSize, Math.ceil(cellSize), Math.ceil(cellSize));
+            }
+          }
+          ctx.globalAlpha = 1;
+          done(null, tile);
+        })
+        .catch(() => {
+          done(null, tile);
+        });
+      return tile;
+    };
+    return gridLayer;
+  }
+
   function drawStops(stops: StopPoint[]) {
     if (!stopLayer) return;
     stopLayer.clearLayers();
@@ -2403,8 +2793,14 @@
         marker.bindTooltip(stopLabel, { direction: 'top', offset: [0, -2], opacity: 0.9 });
       }
       marker.on('click', (event: any) => {
+        if (event) {
+          // Prevent marker clicks from bubbling to the map-level click handler,
+          // which closes details and aborts in-flight detail requests.
+          L.DomEvent.stop(event);
+        }
         if (event?.originalEvent) {
-          L.DomEvent.stopPropagation(event.originalEvent);
+          event.originalEvent.preventDefault?.();
+          event.originalEvent.stopPropagation?.();
         }
         if (!stop.stopId) return;
         void loadStopDetails(stop);
@@ -2495,6 +2891,7 @@
           stopTotalMs += stopResponse.elapsedMs;
           stopTotalBytes += stopResponse.payloadBytes;
         }
+
       }
 
       const nextMode = resolvedMode ?? (currentZoom <= 11 ? 'corridor' : currentZoom <= 14 ? 'mixed' : 'detailed');
@@ -2551,6 +2948,35 @@
       } else if (storedPreference === '1') {
         animateVehicles = true;
       }
+      const storedHeatPreference = window.localStorage.getItem(TRANSIT_HEAT_STORAGE_KEY);
+      if (storedHeatPreference === '0') {
+        transitHeatEnabled = false;
+      } else if (storedHeatPreference === '1') {
+        transitHeatEnabled = true;
+      }
+      const storedPopulationHeatPreference = window.localStorage.getItem(POPULATION_HEAT_STORAGE_KEY);
+      if (storedPopulationHeatPreference === '0') {
+        populationHeatEnabled = false;
+      } else if (storedPopulationHeatPreference === '1') {
+        populationHeatEnabled = true;
+      }
+      const storedLegendCollapsed = window.localStorage.getItem(TRANSIT_HEAT_LEGEND_COLLAPSED_STORAGE_KEY);
+      if (storedLegendCollapsed === '1') {
+        transitHeatLegendCollapsed = true;
+      } else if (storedLegendCollapsed === '0') {
+        transitHeatLegendCollapsed = false;
+      }
+      const storedPopulationLegendCollapsed = window.localStorage.getItem(POPULATION_HEAT_LEGEND_COLLAPSED_STORAGE_KEY);
+      if (storedPopulationLegendCollapsed === '1') {
+        populationHeatLegendCollapsed = true;
+      } else if (storedPopulationLegendCollapsed === '0') {
+        populationHeatLegendCollapsed = false;
+      }
+    }
+
+    void loadTransitHeatHealth();
+    if (populationHeatEnabled) {
+      void loadPopulationHeatHealth();
     }
 
     const leafletModule = await import('leaflet');
@@ -2561,19 +2987,26 @@
       maxZoom: 16,
     }).setView([data.center.lat, data.center.lon], data.zoom);
 
-    L.tileLayer(DARK_TILE_URL, {
-      subdomains: 'abcd',
-      maxZoom: 19,
-      attribution: DARK_TILE_ATTRIBUTION,
-    }).addTo(map);
+    syncBasemapTheme();
     L.control.zoom({ position: 'bottomright' }).addTo(map);
 
     map.createPane(ROUTE_GEOMETRY_PANE).style.zIndex = '410';
+    map.createPane(POPULATION_HEAT_PANE).style.zIndex = '404';
+    map.createPane(TRANSIT_HEAT_PANE).style.zIndex = '405';
+    map.createPane(CENSUS_BOUNDARY_PANE).style.zIndex = '455';
     map.createPane(ROUTE_STOP_PANE).style.zIndex = '460';
     map.createPane(ROUTE_ANIMATION_PANE).style.zIndex = '470';
     map.createPane(REALTIME_VEHICLE_PANE).style.zIndex = '480';
 
     routeLayer = L.layerGroup().addTo(map);
+    populationHeatLayer = createPopulationHeatTileLayer();
+    if (populationHeatEnabled) {
+      populationHeatLayer.addTo(map);
+    }
+    transitHeatLayer = createTransitHeatTileLayer();
+    if (transitHeatEnabled) {
+      transitHeatLayer.addTo(map);
+    }
     stopLayer = L.layerGroup().addTo(map);
     animationLayer = L.layerGroup().addTo(map);
     realtimeVehicleLayer = L.layerGroup().addTo(map);
@@ -2589,12 +3022,20 @@
 
     map.on('moveend', queueRefresh);
     map.on('zoomend', queueRefresh);
-    map.on('click', () => {
+    map.on('click', (event: any) => {
+      if (event?.originalEvent?.defaultPrevented) return;
       if (!detailKind) return;
       closeDetails();
     });
     if (typeof window !== 'undefined') {
       window.addEventListener('keydown', onWindowKeydown);
+      mapThemeObserver = new MutationObserver(() => {
+        syncBasemapTheme();
+      });
+      mapThemeObserver.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ['data-theme'],
+      });
     }
     await loadRouteDataFromViewport();
     realtimeRefreshTimer = setInterval(() => {
@@ -2611,6 +3052,9 @@
     if (typeof window !== 'undefined') {
       window.removeEventListener('keydown', onWindowKeydown);
     }
+    mapThemeObserver?.disconnect();
+    mapThemeObserver = null;
+    clearCensusBoundaryOverlay();
     clearAnimationMarkers();
     clearRealtimeVehicleMarkers();
     if (map) {
@@ -2645,20 +3089,102 @@
       <span class="city-search-error">{citySearchError}</span>
     {/if}
   </form>
-  <div class="overlay mode">
-    {#each modePills as pill}
-      <span class="mode-pill">{pill}</span>
-    {/each}
-    <span class="mode-pill">z{currentZoom}</span>
+  <div class="overlay-stack overlay-stack-right">
+    <div class="overlay mode">
+      {#each modePills as pill}
+        <span class="mode-pill">{pill}</span>
+      {/each}
+      <span class="mode-pill">z{currentZoom}</span>
+    </div>
+    <div class="overlay stats">
+      routes {renderMetrics.routeLoadMs}ms / {(renderMetrics.routePayloadBytes / 1024).toFixed(1)}KB · stops {renderMetrics.stopLoadMs}ms /
+      {(renderMetrics.stopPayloadBytes / 1024).toFixed(1)}KB
+    </div>
+    <label class="overlay heat-toggle">
+      <input type="checkbox" checked={transitHeatEnabled} on:change={onToggleTransitHeat} />
+      Transit density heatmap (underlay)
+    </label>
+    {#if transitHeatEnabled}
+      <div class="overlay heat-legend">
+        <div class="heat-legend-header">
+          <strong>Transit density</strong>
+          <div class="heat-legend-header-controls">
+            <span>v{heatVersionLabel(transitHeatHealth?.versionKey)}</span>
+            <button
+              type="button"
+              class="heat-legend-collapse-btn"
+              on:click={onToggleTransitHeatLegend}
+              aria-expanded={!transitHeatLegendCollapsed}
+              aria-label={transitHeatLegendCollapsed ? 'Expand heat legend' : 'Collapse heat legend'}
+            >
+              {transitHeatLegendCollapsed ? 'Show' : 'Hide'}
+            </button>
+          </div>
+        </div>
+        {#if !transitHeatLegendCollapsed}
+          <div class="heat-legend-ramp" aria-hidden="true"></div>
+          <div class="heat-legend-scale">
+            <span>low</span>
+            <span>high</span>
+          </div>
+          <div class="heat-legend-meta">
+            {#if transitHeatHealth}
+              z{transitHeatHealth.minZoom ?? '?'}-{transitHeatHealth.maxZoom ?? '?'} · {transitHeatHealth.tileCount.toLocaleString()} tiles
+            {:else if transitHeatHealthError}
+              {transitHeatHealthError}
+            {:else}
+              Loading heat metadata...
+            {/if}
+          </div>
+        {/if}
+      </div>
+    {/if}
+    <label class="overlay heat-toggle">
+      <input type="checkbox" checked={populationHeatEnabled} on:change={onTogglePopulationHeat} />
+      Population density heatmap (underlay)
+    </label>
+    {#if populationHeatEnabled}
+      <div class="overlay heat-legend">
+        <div class="heat-legend-header">
+          <strong>Population density</strong>
+          <div class="heat-legend-header-controls">
+            <span>v{heatVersionLabel(populationHeatHealth?.versionKey)}</span>
+            <button
+              type="button"
+              class="heat-legend-collapse-btn"
+              on:click={onTogglePopulationHeatLegend}
+              aria-expanded={!populationHeatLegendCollapsed}
+              aria-label={populationHeatLegendCollapsed ? 'Expand population legend' : 'Collapse population legend'}
+            >
+              {populationHeatLegendCollapsed ? 'Show' : 'Hide'}
+            </button>
+          </div>
+        </div>
+        {#if !populationHeatLegendCollapsed}
+          <div class="heat-legend-ramp population-heat-legend-ramp" aria-hidden="true"></div>
+          <div class="heat-legend-scale">
+            <span>low</span>
+            <span>high</span>
+          </div>
+          <div class="heat-legend-meta">
+            {#if populationHeatHealth}
+              z{populationHeatHealth.minZoom ?? '?'}-{populationHeatHealth.maxZoom ?? '?'} ·
+              {populationHeatHealth.polygonsWithPopulation.toLocaleString()} areas ·
+              max {Math.round(populationHeatHealth.maxDensityScale).toLocaleString()} /km²
+            {:else if populationHeatHealthError}
+              {populationHeatHealthError}
+            {:else}
+              Loading population metadata...
+            {/if}
+          </div>
+        {/if}
+      </div>
+    {/if}
+    <label class="overlay anim-toggle">
+      <input type="checkbox" checked={animateVehicles} on:change={onToggleVehicleAnimation} />
+      Animate fallback marker (when no live vehicles)
+    </label>
   </div>
-  <div class="overlay stats">
-    routes {renderMetrics.routeLoadMs}ms / {(renderMetrics.routePayloadBytes / 1024).toFixed(1)}KB · stops {renderMetrics.stopLoadMs}ms /
-    {(renderMetrics.stopPayloadBytes / 1024).toFixed(1)}KB
-  </div>
-  <label class="overlay anim-toggle">
-    <input type="checkbox" checked={animateVehicles} on:change={onToggleVehicleAnimation} />
-    Animate fallback marker (when no live vehicles)
-  </label>
   {#if detailKind}
     <div
       class="sidebar-glass"
@@ -2666,8 +3192,9 @@
         routeDetails?.routeColor ?? selectedRoute?.routeColor ?? stopDetails?.primaryRoutePath?.route?.routeColor
       )}`}
       bind:this={sidebarEl}
+      on:scroll={handleSidebarScroll}
     >
-      <div class="sidebar-header">
+      <div class="sidebar-header" class:is-pinned={sidebarHeaderPinned}>
         <div class="sidebar-header-title">
           {#if detailKind === 'route' && canReturnToCorridor}
             <button type="button" class="sidebar-back-btn" on:click={backToCorridorTiles} aria-label="Back to corridor routes">
@@ -2721,7 +3248,8 @@
           </div>
         </div>
       {:else if detailKind === 'route' && routeDetails}
-        <div class="sidebar-section route-detail-section">
+        <div class="sidebar-section">
+          <h3 class="sidebar-section-title">Overview</h3>
           <div class="meta-grid">
             <div class="meta-chip">
               <span class="meta-label">Agency</span>
@@ -2758,9 +3286,52 @@
               </div>
             {/if}
           </div>
-          {#if routeServiceStats && hasRouteServiceStatsData}
+          <p class="detail-copy">
+            Route-level census context is temporarily hidden. A route can cross many dissemination areas, so this will be replaced with
+            along-route aggregation instead of a single DA.
+          </p>
+        </div>
+        {#if routeRealtime}
+          <div class="sidebar-section">
+            <h3 class="sidebar-section-title">Realtime Status</h3>
+            <div class="realtime-wrap">
+              <div class="realtime-grid">
+                <span>Last refresh: {formatTimeLabel(routeRealtime.refreshedAt)}</span>
+                <span>Vehicles: {routeRealtime.counts?.vehicles ?? 0}</span>
+                <span>Trip updates: {routeRealtime.counts?.tripUpdates ?? 0}</span>
+                <span>Alerts: {routeRealtime.counts?.alerts ?? 0}</span>
+              </div>
+              {#if agencyRealtimeHealth}
+                <div class="realtime-grid">
+                  <span>Health agency: {agencyRealtimeHealth.agencySlug}</span>
+                  <span>SA: {agencyRealtimeHealth.buckets?.service_alerts?.status ?? 'idle'}</span>
+                  <span>TU: {agencyRealtimeHealth.buckets?.trip_updates?.status ?? 'idle'}</span>
+                  <span>VP: {agencyRealtimeHealth.buckets?.vehicle_positions?.status ?? 'idle'}</span>
+                </div>
+                {#if agencyRealtimeHealth.notes}
+                  <span>{agencyRealtimeHealth.notes}</span>
+                {/if}
+              {/if}
+              {#if routeRealtime.alerts && routeRealtime.alerts.length > 0}
+                <span>
+                  Active alerts:
+                  {routeRealtime.alerts
+                    .slice(0, 3)
+                    .map((alert) => alert.headerText || alert.effect || alert.id || 'Alert')
+                    .join(' | ')}
+                </span>
+              {/if}
+              {#if routeRealtime.notes}
+                <span>{routeRealtime.notes}</span>
+              {/if}
+            </div>
+          </div>
+        {/if}
+        {#if routeServiceStats && hasRouteServiceStatsData}
+          <div class="sidebar-section">
+            <h3 class="sidebar-section-title">Service Supply</h3>
             <div class="service-stats-wrap">
-              <span class="stop-list-title">Service supply ({formatServiceDate(routeServiceStats.serviceDate)})</span>
+              <span class="stop-list-title">Snapshot ({formatServiceDate(routeServiceStats.serviceDate)})</span>
               <div class="meta-grid service-stats-grid">
                 <div class="meta-chip">
                   <span class="meta-label">Scheduled trips</span>
@@ -2823,51 +3394,11 @@
                 <p class="detail-copy">Methodology: {routeServiceStats.methodology.notes.join(' ')}</p>
               {/if}
             </div>
-          {/if}
-          {#if routeDetails.routeDesc}
-            <p class="detail-copy">{routeDetails.routeDesc}</p>
-          {/if}
-          {#if routeRealtime}
-            <div class="realtime-wrap">
-              <span class="stop-list-title">Realtime status</span>
-              <div class="realtime-grid">
-                <span>Last refresh: {formatTimeLabel(routeRealtime.refreshedAt)}</span>
-                <span>Vehicles: {routeRealtime.counts?.vehicles ?? 0}</span>
-                <span>Trip updates: {routeRealtime.counts?.tripUpdates ?? 0}</span>
-                <span>Alerts: {routeRealtime.counts?.alerts ?? 0}</span>
-              </div>
-              {#if agencyRealtimeHealth}
-                <div class="realtime-grid">
-                  <span>Health agency: {agencyRealtimeHealth.agencySlug}</span>
-                  <span>SA: {agencyRealtimeHealth.buckets?.service_alerts?.status ?? 'idle'}</span>
-                  <span>TU: {agencyRealtimeHealth.buckets?.trip_updates?.status ?? 'idle'}</span>
-                  <span>VP: {agencyRealtimeHealth.buckets?.vehicle_positions?.status ?? 'idle'}</span>
-                </div>
-                {#if agencyRealtimeHealth.notes}
-                  <span>{agencyRealtimeHealth.notes}</span>
-                {/if}
-              {/if}
-              {#if routeRealtime.alerts && routeRealtime.alerts.length > 0}
-                <span>
-                  Active alerts:
-                  {routeRealtime.alerts
-                    .slice(0, 3)
-                    .map((alert) => alert.headerText || alert.effect || alert.id || 'Alert')
-                    .join(' | ')}
-                </span>
-              {/if}
-              {#if routeRealtime.notes}
-                <span>{routeRealtime.notes}</span>
-              {/if}
-            </div>
-          {/if}
-          {#if routeDetails.headsigns && routeDetails.headsigns.length > 0}
-            <span>Headsigns: {routeDetails.headsigns.join(' | ')}</span>
-          {/if}
-          {#if routeDetails.sampleTrips && routeDetails.sampleTrips.length > 0}
-            <span>Sample trips: {routeDetails.sampleTrips.join(', ')}</span>
-          {/if}
-          {#if routeDetails.routePath && routeDetails.routePath.stops.length > 0}
+          </div>
+        {/if}
+        {#if routeDetails.routePath && routeDetails.routePath.stops.length > 0}
+          <div class="sidebar-section route-detail-section">
+            <h3 class="sidebar-section-title">Route Stops</h3>
             <div
               class="stop-list-wrap route-stop-list-wrap"
               style={`--route-accent:${asCssRouteColor(routeDetails.routeColor ?? selectedRoute?.routeColor)}`}
@@ -2900,10 +3431,25 @@
                 {/each}
               </ol>
             </div>
-          {/if}
-        </div>
+          </div>
+        {/if}
+        {#if routeDetails.routeDesc || (routeDetails.headsigns && routeDetails.headsigns.length > 0) || (routeDetails.sampleTrips && routeDetails.sampleTrips.length > 0)}
+          <div class="sidebar-section">
+            <h3 class="sidebar-section-title">Additional Details</h3>
+            {#if routeDetails.routeDesc}
+              <p class="detail-copy">{routeDetails.routeDesc}</p>
+            {/if}
+            {#if routeDetails.headsigns && routeDetails.headsigns.length > 0}
+              <p class="detail-copy">Headsigns: {routeDetails.headsigns.join(' | ')}</p>
+            {/if}
+            {#if routeDetails.sampleTrips && routeDetails.sampleTrips.length > 0}
+              <p class="detail-copy">Sample trips: {routeDetails.sampleTrips.join(', ')}</p>
+            {/if}
+          </div>
+        {/if}
       {:else if detailKind === 'stop' && stopDetails}
         <div class="sidebar-section">
+          <h3 class="sidebar-section-title">Stop Overview</h3>
           <div class="meta-grid">
             <div class="meta-chip">
               <span class="meta-label">Agency</span>
@@ -2944,9 +3490,55 @@
               </div>
             {/if}
           </div>
-          {#if stopRealtime}
+          {#if stopDetails.censusContext}
+            <div class="meta-grid">
+              <div class="meta-chip">
+                <span class="meta-label">Census DA ({stopDetails.censusContext.censusYear ?? 2021})</span>
+                <strong class="meta-value">{stopDetails.censusContext.dauid ?? stopDetails.censusContext.dguid ?? 'n/a'}</strong>
+              </div>
+              {#if stopDetails.censusContext.provinceName}
+                <div class="meta-chip">
+                  <span class="meta-label">Province</span>
+                  <strong class="meta-value">{stopDetails.censusContext.provinceName}</strong>
+                </div>
+              {/if}
+              {#if stopDetails.censusContext.population !== null && stopDetails.censusContext.population !== undefined}
+                <div class="meta-chip">
+                  <span class="meta-label">Population</span>
+                  <strong class="meta-value">{formatCount(stopDetails.censusContext.population)}</strong>
+                </div>
+              {/if}
+              {#if stopDetails.censusContext.populationDensityPerSqKm !== null && stopDetails.censusContext.populationDensityPerSqKm !== undefined}
+                <div class="meta-chip">
+                  <span class="meta-label">Population density</span>
+                  <strong class="meta-value">{formatDecimal(stopDetails.censusContext.populationDensityPerSqKm, 1)} / km²</strong>
+                </div>
+              {/if}
+              {#if stopDetails.censusContext.privateDwellings !== null && stopDetails.censusContext.privateDwellings !== undefined}
+                <div class="meta-chip">
+                  <span class="meta-label">Private dwellings</span>
+                  <strong class="meta-value">{formatCount(stopDetails.censusContext.privateDwellings)}</strong>
+                </div>
+              {/if}
+              {#if stopDetails.censusContext.landAreaSqKm !== null && stopDetails.censusContext.landAreaSqKm !== undefined}
+                <div class="meta-chip">
+                  <span class="meta-label">Land area</span>
+                  <strong class="meta-value">{formatDecimal(stopDetails.censusContext.landAreaSqKm, 2)} km²</strong>
+                </div>
+              {/if}
+            </div>
+            {#if stopDetails.censusContext.boundaryGeometry}
+              <p class="detail-copy">Boundary overlay shown on map.</p>
+            {/if}
+            {#if stopDetails.censusContext.population === null || stopDetails.censusContext.population === undefined}
+              <p class="detail-copy">Population metrics not loaded yet. Add a census population CSV to `prisma/data/census/2021/`.</p>
+            {/if}
+          {/if}
+        </div>
+        {#if stopRealtime}
+          <div class="sidebar-section">
+            <h3 class="sidebar-section-title">Realtime at Stop</h3>
             <div class="realtime-wrap">
-              <span class="stop-list-title">Realtime at stop</span>
               <div class="realtime-grid">
                 <span>Last refresh: {formatTimeLabel(stopRealtime.refreshedAt)}</span>
                 <span>Vehicles on serving trips: {stopRealtime.counts?.vehicles ?? 0}</span>
@@ -2970,26 +3562,34 @@
                 </span>
               {/if}
             </div>
-          {/if}
-          {#if stopDetails.platformCode}
-            <p class="detail-copy">Platform: {stopDetails.platformCode}</p>
-          {/if}
-          {#if stopDetails.stopDesc}
-            <p class="detail-copy">{stopDetails.stopDesc}</p>
-          {/if}
-          {#if stopDetails.routes && stopDetails.routes.length > 0}
-            <p class="detail-copy">
-              Routes:
-              {stopDetails.routes
-                .slice(0, 14)
-                .map((route) => route.routeShortName || route.routeLongName || route.routeId)
-                .join(', ')}
-            </p>
-          {/if}
-          {#if stopDetails.headsigns && stopDetails.headsigns.length > 0}
-            <p class="detail-copy">Headsigns: {stopDetails.headsigns.join(' | ')}</p>
-          {/if}
-          {#if stopDetails.primaryRoutePath && stopDetails.primaryRoutePath.stops.length > 0}
+          </div>
+        {/if}
+        {#if stopDetails.platformCode || stopDetails.stopDesc || (stopDetails.routes && stopDetails.routes.length > 0) || (stopDetails.headsigns && stopDetails.headsigns.length > 0)}
+          <div class="sidebar-section">
+            <h3 class="sidebar-section-title">Context</h3>
+            {#if stopDetails.platformCode}
+              <p class="detail-copy">Platform: {stopDetails.platformCode}</p>
+            {/if}
+            {#if stopDetails.stopDesc}
+              <p class="detail-copy">{stopDetails.stopDesc}</p>
+            {/if}
+            {#if stopDetails.routes && stopDetails.routes.length > 0}
+              <p class="detail-copy">
+                Routes:
+                {stopDetails.routes
+                  .slice(0, 14)
+                  .map((route) => route.routeShortName || route.routeLongName || route.routeId)
+                  .join(', ')}
+              </p>
+            {/if}
+            {#if stopDetails.headsigns && stopDetails.headsigns.length > 0}
+              <p class="detail-copy">Headsigns: {stopDetails.headsigns.join(' | ')}</p>
+            {/if}
+          </div>
+        {/if}
+        {#if stopDetails.primaryRoutePath && stopDetails.primaryRoutePath.stops.length > 0}
+          <div class="sidebar-section">
+            <h3 class="sidebar-section-title">Primary Route Path</h3>
             <div
               class="stop-list-wrap"
               style={`--route-accent:${asCssRouteColor(stopDetails.primaryRoutePath.route?.routeColor)}`}
@@ -3025,13 +3625,37 @@
                 {/each}
               </ol>
             </div>
-          {/if}
-        </div>
+          </div>
+        {/if}
       {/if}
     </div>
   {/if}
   {#if loading}
-    <div class="overlay loading">Updating routes...</div>
+    <div class="overlay loading">
+      <svg class="loading-spinner" viewBox="0 0 50 50" width="16" height="16">
+        <circle
+          cx="25"
+          cy="25"
+          r="20"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="3"
+          stroke-dasharray="31.4 94.2"
+          opacity="0.3"
+        />
+        <circle
+          cx="25"
+          cy="25"
+          r="20"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="3"
+          stroke-dasharray="31.4 94.2"
+          stroke-dashoffset="0"
+        />
+      </svg>
+      Updating routes...
+    </div>
   {/if}
   {#if error}
     <div class="overlay error">{error}</div>
@@ -3041,7 +3665,7 @@
 <style>
   .map-shell {
     position: relative;
-    border: 1px solid #1f2a40;
+    border: 1px solid var(--border-primary);
     border-radius: 0.75rem;
     overflow: hidden;
   }
@@ -3050,7 +3674,7 @@
     height: calc(100vh - 8.5rem);
     min-height: 620px;
     width: 100%;
-    background: #0a1220;
+    background: var(--surface-2);
   }
 
   .overlay {
@@ -3058,21 +3682,37 @@
     z-index: 500;
     padding: 0.35rem 0.6rem;
     border-radius: 0.45rem;
-    border: 1px solid #2f3d59;
-    background: rgba(7, 12, 24, 0.82);
-    color: #d8e3fa;
+    border: 1px solid var(--border-primary);
+    background: color-mix(in srgb, var(--surface-2) 88%, transparent);
+    color: var(--text-secondary);
     font-size: 0.8rem;
     backdrop-filter: blur(2px);
+    box-shadow: 0 6px 20px rgba(2, 8, 24, 0.26);
+  }
+
+  .overlay-stack {
+    position: absolute;
+    z-index: 520;
+    display: flex;
+    flex-direction: column;
+    gap: 0.42rem;
+  }
+
+  .overlay-stack-right {
+    top: 0.8rem;
+    right: 0.8rem;
+    align-items: flex-end;
+    max-width: min(31rem, calc(100% - 1.6rem));
   }
 
   .overlay.mode {
-    top: 0.8rem;
-    right: 0.8rem;
     display: inline-flex;
     align-items: center;
     gap: 0.35rem;
     flex-wrap: wrap;
-    max-width: min(44rem, calc(100% - 1.6rem));
+    justify-content: flex-end;
+    position: static;
+    max-width: 100%;
     padding: 0.28rem 0.35rem;
   }
 
@@ -3084,31 +3724,31 @@
     gap: 0.38rem;
     width: min(26rem, calc(100% - 1.6rem));
     padding: 0.38rem;
-    border-color: #3c5278;
-    background: rgba(6, 12, 23, 0.9);
+    border-color: var(--border-primary);
+    background: color-mix(in srgb, var(--surface-2) 94%, transparent);
   }
 
   .overlay.city-search input[type='search'] {
     width: 100%;
     min-width: 0;
-    border: 1px solid #3b4f75;
+    border: 1px solid var(--border-primary);
     border-radius: 0.4rem;
-    background: #0d1a31;
-    color: #e2eefd;
+    background: var(--surface-input);
+    color: var(--text-primary);
     padding: 0.4rem 0.52rem;
     font-size: 0.82rem;
     outline: none;
   }
 
   .overlay.city-search input[type='search']::placeholder {
-    color: #96b1dd;
+    color: var(--text-muted);
   }
 
   .overlay.city-search button {
-    border: 1px solid #5576ad;
+    border: 1px solid var(--border-primary);
     border-radius: 0.42rem;
-    background: #15335d;
-    color: #edf5ff;
+    background: var(--surface-3);
+    color: var(--text-primary);
     font-size: 0.78rem;
     font-weight: 700;
     padding: 0.36rem 0.7rem;
@@ -3122,7 +3762,7 @@
 
   .city-search-error {
     grid-column: 1 / -1;
-    color: #fecaca;
+    color: var(--danger);
     font-size: 0.72rem;
   }
 
@@ -3131,30 +3771,78 @@
     align-items: center;
     border: 1px solid rgba(126, 164, 224, 0.55);
     border-radius: 999px;
-    padding: 0.18rem 0.52rem;
+    padding: 0.2rem 0.56rem;
     font-size: 0.74rem;
     font-weight: 700;
     letter-spacing: 0.01em;
-    color: #e3eeff;
-    background: rgba(18, 34, 66, 0.82);
+    color: var(--text-primary);
+    background: color-mix(in srgb, var(--surface-3) 86%, transparent);
   }
 
   .overlay.loading {
     top: 2.95rem;
     right: 0.8rem;
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.4rem 0.7rem;
+    background: color-mix(in srgb, var(--surface-2) 92%, transparent);
+    border-color: rgba(96, 180, 255, 0.45);
+    box-shadow: 0 0 0 1px rgba(96, 180, 255, 0.2) inset, 0 6px 20px rgba(2, 8, 24, 0.26);
+    animation: loadingPulse 2s ease-in-out infinite;
+  }
+
+  .loading-spinner {
+    display: inline-block;
+    flex-shrink: 0;
+    color: #60b4ff;
+    animation: spin 1s linear infinite;
+  }
+
+  .loading-spinner circle:last-child {
+    stroke: #60b4ff;
+    stroke-dashoffset: 0;
+    animation: dashOffset 1.5s ease-in-out infinite;
+  }
+
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  @keyframes dashOffset {
+    0% {
+      stroke-dashoffset: 0;
+    }
+    50% {
+      stroke-dashoffset: -62.8;
+    }
+    100% {
+      stroke-dashoffset: -125.6;
+    }
+  }
+
+  @keyframes loadingPulse {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.7;
+    }
   }
 
   .overlay.stats {
-    top: 2.95rem;
-    right: 0.8rem;
-    transform: translateY(2.2rem);
+    position: static;
+    max-width: 100%;
     font-size: 0.72rem;
-    color: #c5d7f8;
+    color: var(--text-secondary);
   }
 
+  .overlay.heat-toggle,
   .overlay.anim-toggle {
-    top: 7.2rem;
-    right: 0.8rem;
+    position: static;
     display: inline-flex;
     align-items: center;
     gap: 0.45rem;
@@ -3163,6 +3851,94 @@
     cursor: pointer;
   }
 
+  .overlay.heat-legend {
+    position: static;
+    width: 15.8rem;
+    max-width: 100%;
+    display: grid;
+    gap: 0.32rem;
+    padding: 0.44rem 0.55rem 0.48rem;
+    font-size: 0.72rem;
+  }
+
+  .heat-legend-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.6rem;
+    align-items: center;
+    color: var(--text-secondary);
+    font-size: 0.69rem;
+  }
+
+  .heat-legend-header-controls {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
+  .heat-legend-header strong {
+    color: var(--text-primary);
+    font-size: 0.74rem;
+  }
+
+  .heat-legend-collapse-btn {
+    border: 1px solid var(--border-primary);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--surface-3) 88%, transparent);
+    color: var(--text-primary);
+    font-size: 0.63rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    padding: 0.1rem 0.46rem;
+    cursor: pointer;
+  }
+
+  .heat-legend-ramp {
+    height: 0.5rem;
+    border-radius: 999px;
+    border: 1px solid rgba(114, 144, 194, 0.45);
+    background: linear-gradient(
+      90deg,
+      rgb(22, 82, 216) 0%,
+      rgb(68, 178, 214) 35%,
+      rgb(164, 216, 78) 62%,
+      rgb(233, 188, 39) 80%,
+      rgb(244, 72, 16) 100%
+    );
+  }
+
+  .heat-legend-ramp.population-heat-legend-ramp {
+    border: 1px solid rgba(150, 128, 214, 0.45);
+    background: linear-gradient(
+      90deg,
+      rgb(26, 62, 128) 0%,
+      rgb(62, 110, 208) 36%,
+      rgb(142, 158, 224) 64%,
+      rgb(206, 136, 188) 83%,
+      rgb(232, 86, 86) 100%
+    );
+  }
+
+  .heat-legend-scale {
+    display: flex;
+    justify-content: space-between;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 0.62rem;
+    font-weight: 700;
+  }
+
+  .heat-legend-meta {
+    color: var(--text-secondary);
+    font-size: 0.67rem;
+  }
+
+  .overlay.anim-toggle {
+    max-width: 100%;
+  }
+
+  .overlay.heat-toggle input,
   .overlay.anim-toggle input {
     margin: 0;
     accent-color: #60a5fa;
@@ -3171,9 +3947,9 @@
   .overlay.error {
     left: 0.8rem;
     bottom: 0.8rem;
-    border-color: #7f1d1d;
-    background: rgba(127, 29, 29, 0.88);
-    color: #fecaca;
+    border-color: var(--danger-strong);
+    background: var(--danger-bg);
+    color: var(--danger);
     max-width: min(40rem, calc(100% - 1.6rem));
   }
 
@@ -3193,9 +3969,9 @@
     border-radius: 0.8rem;
     background:
       radial-gradient(circle at 92% 8%, color-mix(in oklab, var(--sidebar-accent) 34%, transparent), transparent 45%),
-      rgba(9, 16, 30, 0.6);
+      color-mix(in srgb, var(--surface-2) 84%, transparent);
     backdrop-filter: blur(15px) saturate(120%);
-    color: #e2ebfb;
+    color: var(--text-secondary);
     overflow-y: auto;
     box-shadow: inset 0 0 0 1px rgba(196, 214, 244, 0.08), 0 18px 50px rgba(2, 6, 22, 0.45);
   }
@@ -3205,6 +3981,27 @@
     justify-content: space-between;
     gap: 0.75rem;
     align-items: center;
+    position: sticky;
+    top: -0.85rem;
+    z-index: 4;
+    margin: -0.85rem -0.95rem 0;
+    padding: 0.85rem 0.95rem 0.62rem;
+    border-bottom: 1px solid transparent;
+    background: linear-gradient(180deg, rgba(9, 20, 40, 0.18), rgba(9, 20, 40, 0));
+    transition:
+      background 220ms ease,
+      border-color 220ms ease,
+      box-shadow 220ms ease,
+      backdrop-filter 220ms ease;
+  }
+
+  .sidebar-header.is-pinned {
+    border-bottom-color: color-mix(in oklab, var(--sidebar-accent) 28%, rgba(155, 188, 243, 0.38));
+    background:
+      radial-gradient(circle at 96% 4%, color-mix(in oklab, var(--sidebar-accent) 34%, transparent), transparent 50%),
+      linear-gradient(180deg, rgba(10, 23, 45, 0.97), rgba(10, 23, 45, 0.89));
+    backdrop-filter: blur(10px) saturate(130%);
+    box-shadow: 0 10px 18px rgba(3, 9, 20, 0.34);
   }
 
   .sidebar-header-title {
@@ -3232,14 +4029,14 @@
     font-size: 1.18rem;
     font-weight: 800;
     line-height: 1.08;
-    color: #f8fbff;
+    color: var(--text-primary);
     text-shadow: 0 1px 0 rgba(0, 0, 0, 0.25);
   }
 
   .sidebar-header button {
-    border: 1px solid #5470a3;
-    background: rgba(17, 33, 66, 0.86);
-    color: #dce8ff;
+    border: 1px solid var(--border-primary);
+    background: color-mix(in srgb, var(--surface-3) 88%, transparent);
+    color: var(--text-primary);
     border-radius: 0.4rem;
     padding: 0.25rem 0.5rem;
     cursor: pointer;
@@ -3253,9 +4050,9 @@
   }
 
   .sidebar-back-btn {
-    border: 1px solid #5470a3;
-    background: rgba(17, 33, 66, 0.86);
-    color: #dce8ff;
+    border: 1px solid var(--border-primary);
+    background: color-mix(in srgb, var(--surface-3) 88%, transparent);
+    color: var(--text-primary);
     border-radius: 0.4rem;
     width: 1.7rem;
     height: 1.55rem;
@@ -3276,9 +4073,18 @@
     background: linear-gradient(180deg, rgba(14, 29, 55, 0.7), rgba(11, 23, 43, 0.74));
   }
 
+  .sidebar-section-title {
+    margin: 0;
+    font-size: 1.02rem;
+    line-height: 1.1;
+    font-weight: 800;
+    letter-spacing: 0.01em;
+    color: color-mix(in oklab, var(--sidebar-accent) 45%, #f4f7ff);
+    text-shadow: 0 1px 0 rgba(0, 0, 0, 0.24);
+  }
+
   .route-detail-section {
     flex: 1;
-    min-height: 0;
   }
 
   .meta-grid {
@@ -3290,7 +4096,6 @@
   .service-stats-wrap {
     display: grid;
     gap: 0.6rem;
-    margin-top: 0.2rem;
   }
 
   .service-stats-grid {
@@ -3324,21 +4129,21 @@
     font-size: 0.63rem;
     letter-spacing: 0.06em;
     text-transform: uppercase;
-    color: #96b7e9;
+    color: var(--text-muted);
     font-weight: 700;
   }
 
   .meta-value {
     font-size: 0.84rem;
     line-height: 1.2;
-    color: #edf5ff;
+    color: var(--text-primary);
   }
 
   .detail-copy {
     margin: 0;
     font-size: 0.78rem;
     line-height: 1.32;
-    color: #cfe2ff;
+    color: var(--text-secondary);
   }
 
   .corridor-tile-grid {
@@ -3369,12 +4174,12 @@
   .corridor-route-title {
     font-size: 0.83rem;
     font-weight: 700;
-    color: #f8fafc;
+    color: var(--text-primary);
   }
 
   .corridor-route-meta {
     font-size: 0.72rem;
-    color: #9fbce7;
+    color: var(--text-muted);
   }
 
   .stop-list-wrap {
@@ -3410,7 +4215,6 @@
   .realtime-wrap {
     display: grid;
     gap: 0.42rem;
-    margin-top: 0.25rem;
     padding: 0.55rem 0.6rem;
     border: 1px solid rgba(96, 146, 226, 0.36);
     border-radius: 0.6rem;
@@ -3443,7 +4247,7 @@
     display: flex;
     align-items: center;
     gap: 0.45rem;
-    color: #d7e6ff;
+    color: var(--text-secondary);
     border-radius: 999px;
     padding: 0.1rem 0.2rem;
   }
@@ -3485,20 +4289,78 @@
 
   .wheelchair-indicator {
     margin-left: 0.28rem;
-    color: #93c5fd;
+    color: var(--accent);
     font-size: 0.8rem;
   }
 
   .sidebar-loading {
     margin: 0;
-    color: #bfdbfe;
+    color: var(--text-secondary);
     font-size: 0.84rem;
   }
 
   .sidebar-error {
     margin: 0;
-    color: #fecaca;
+    color: var(--danger);
     font-size: 0.84rem;
+  }
+
+  :global(.leaflet-control-zoom a) {
+    background: var(--surface-2) !important;
+    color: var(--text-primary) !important;
+    border-color: var(--border-primary) !important;
+  }
+
+  :global(.leaflet-control-zoom a:hover) {
+    background: var(--surface-3) !important;
+  }
+
+  :global(.leaflet-control-attribution) {
+    background: color-mix(in srgb, var(--surface-2) 90%, transparent) !important;
+    color: var(--text-muted) !important;
+    border-top: 1px solid var(--border-primary);
+    border-left: 1px solid var(--border-primary);
+  }
+
+  :global(.leaflet-control-attribution a) {
+    color: var(--link) !important;
+  }
+
+  :global(html[data-theme='light'] .overlay) {
+    background: color-mix(in srgb, #ffffff 93%, transparent);
+  }
+
+  :global(html[data-theme='light'] .sidebar-glass) {
+    border-color: rgba(153, 172, 206, 0.68);
+    background:
+      radial-gradient(circle at 92% 8%, color-mix(in oklab, var(--sidebar-accent) 16%, transparent), transparent 48%),
+      rgba(252, 254, 255, 0.92);
+    color: var(--text-primary);
+    box-shadow: inset 0 0 0 1px rgba(208, 220, 240, 0.75), 0 16px 36px rgba(30, 42, 66, 0.14);
+  }
+
+  :global(html[data-theme='light'] .sidebar-section),
+  :global(html[data-theme='light'] .meta-chip),
+  :global(html[data-theme='light'] .service-chart-card),
+  :global(html[data-theme='light'] .stop-list-wrap),
+  :global(html[data-theme='light'] .realtime-wrap),
+  :global(html[data-theme='light'] .corridor-route-tile) {
+    border-color: rgba(154, 174, 208, 0.6);
+    background: rgba(246, 250, 255, 0.95);
+    color: var(--text-primary);
+  }
+
+  :global(html[data-theme='light'] .detail-copy),
+  :global(html[data-theme='light'] .corridor-route-meta),
+  :global(html[data-theme='light'] .stop-list-item),
+  :global(html[data-theme='light'] .sidebar-loading) {
+    color: var(--text-secondary);
+  }
+
+  :global(html[data-theme='light'] .mode-pill) {
+    border-color: rgba(114, 148, 201, 0.56);
+    background: rgba(237, 244, 255, 0.95);
+    color: var(--text-primary);
   }
 
   @media (max-width: 740px) {

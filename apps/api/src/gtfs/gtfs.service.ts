@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { performance } from 'node:perf_hooks';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { CensusBoundaryService } from './census-boundary.service';
 
 type Bbox = {
   minLat: number;
@@ -88,6 +89,22 @@ type MapRouteLinesCacheEntry = {
   value: Record<string, unknown>;
 };
 
+type MapTransitHeatCell = {
+  lat: number;
+  lon: number;
+  intensity: number;
+  rawScore: number;
+  cellLatSpan: number;
+  cellLonSpan: number;
+};
+
+type MapTransitHeatCacheEntry = {
+  key: string;
+  expiresAt: number;
+  createdAt: number;
+  value: Record<string, unknown>;
+};
+
 const SECONDS_PER_DAY = 24 * 60 * 60;
 const STATS_TIME_BANDS: RouteServiceTimeBand[] = [
   { key: 'early_am', label: 'Early AM (03:00-06:00)', startHour: 3, endHour: 6 },
@@ -104,8 +121,14 @@ export class GtfsService {
   private readonly mapRouteLinesCache = new Map<string, MapRouteLinesCacheEntry>();
   private readonly mapRouteLinesCacheTtlMs = 30_000;
   private readonly mapRouteLinesCacheMaxEntries = 120;
+  private readonly mapTransitHeatCache = new Map<string, MapTransitHeatCacheEntry>();
+  private readonly mapTransitHeatCacheTtlMs = 20_000;
+  private readonly mapTransitHeatCacheMaxEntries = 140;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly censusBoundaryService: CensusBoundaryService,
+  ) {}
 
   private extractAgencyRidership(raw: Prisma.JsonValue | null): AgencyRidership | null {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
@@ -244,6 +267,302 @@ export class GtfsService {
     for (const entry of sorted.slice(0, excess)) {
       this.mapRouteLinesCache.delete(entry.key);
     }
+  }
+
+  private heatGridSizeForZoom(zoom: number) {
+    if (zoom <= 7) return 32;
+    if (zoom <= 10) return 44;
+    if (zoom <= 13) return 56;
+    return 68;
+  }
+
+  private buildMapTransitHeatCacheKey(params: {
+    bbox: Bbox;
+    zoom: number;
+    gridSize: number;
+    routeLimit: number;
+    shapeLimit: number;
+    stopLimit: number;
+    serviceAware: boolean;
+    activeFeeds: string;
+  }) {
+    return [
+      `bbox=${this.quantizedBboxKey(params.bbox, params.zoom)}`,
+      `zoom=${params.zoom}`,
+      `grid=${params.gridSize}`,
+      `routeLimit=${params.routeLimit}`,
+      `shapeLimit=${params.shapeLimit}`,
+      `stopLimit=${params.stopLimit}`,
+      `serviceAware=${params.serviceAware}`,
+      `feeds=${params.activeFeeds}`,
+    ].join(';');
+  }
+
+  private readMapTransitHeatCache(key: string) {
+    const now = Date.now();
+    const hit = this.mapTransitHeatCache.get(key);
+    if (!hit) return null;
+    if (hit.expiresAt <= now) {
+      this.mapTransitHeatCache.delete(key);
+      return null;
+    }
+    return hit.value;
+  }
+
+  private writeMapTransitHeatCache(key: string, value: Record<string, unknown>) {
+    const now = Date.now();
+    this.mapTransitHeatCache.set(key, {
+      key,
+      createdAt: now,
+      expiresAt: now + this.mapTransitHeatCacheTtlMs,
+      value,
+    });
+    this.pruneMapTransitHeatCache(now);
+  }
+
+  private pruneMapTransitHeatCache(now = Date.now()) {
+    for (const [key, entry] of this.mapTransitHeatCache.entries()) {
+      if (entry.expiresAt <= now) {
+        this.mapTransitHeatCache.delete(key);
+      }
+    }
+    if (this.mapTransitHeatCache.size <= this.mapTransitHeatCacheMaxEntries) return;
+    const sorted = [...this.mapTransitHeatCache.values()].sort((a, b) => a.createdAt - b.createdAt);
+    const excess = this.mapTransitHeatCache.size - this.mapTransitHeatCacheMaxEntries;
+    for (const entry of sorted.slice(0, excess)) {
+      this.mapTransitHeatCache.delete(entry.key);
+    }
+  }
+
+  async getLatestTransitHeatVersion() {
+    const latest = await this.prisma.transitHeatTile.findFirst({
+      where: { isActive: true },
+      orderBy: [{ createdAt: 'desc' }],
+      select: { versionKey: true },
+    });
+    if (!latest) {
+      return {
+        versionKey: null,
+        tileCount: 0,
+        minZoom: null,
+        maxZoom: null,
+      };
+    }
+    const stats = await this.prisma.transitHeatTile.aggregate({
+      where: { isActive: true, versionKey: latest.versionKey },
+      _count: { _all: true },
+      _min: { z: true },
+      _max: { z: true },
+    });
+    return {
+      versionKey: latest.versionKey,
+      tileCount: stats._count._all,
+      minZoom: stats._min.z ?? null,
+      maxZoom: stats._max.z ?? null,
+    };
+  }
+
+  async getTransitHeatHealth() {
+    const latest = await this.prisma.transitHeatTile.findFirst({
+      where: { isActive: true },
+      orderBy: [{ createdAt: 'desc' }],
+      select: { versionKey: true },
+    });
+    if (!latest) {
+      return {
+        versionKey: null,
+        tileCount: 0,
+        minZoom: null,
+        maxZoom: null,
+        generatedAt: null,
+        tilesByZoom: [],
+      };
+    }
+    const [aggregate, tilesByZoom] = await Promise.all([
+      this.prisma.transitHeatTile.aggregate({
+        where: { isActive: true, versionKey: latest.versionKey },
+        _count: { _all: true },
+        _min: { z: true },
+        _max: { z: true, createdAt: true },
+      }),
+      this.prisma.transitHeatTile.groupBy({
+        by: ['z'],
+        where: { isActive: true, versionKey: latest.versionKey },
+        _count: { _all: true },
+        orderBy: [{ z: 'asc' }],
+      }),
+    ]);
+    return {
+      versionKey: latest.versionKey,
+      tileCount: aggregate._count._all,
+      minZoom: aggregate._min.z ?? null,
+      maxZoom: aggregate._max.z ?? null,
+      generatedAt: aggregate._max.createdAt ?? null,
+      tilesByZoom: tilesByZoom.map((row) => ({
+        zoom: row.z,
+        tiles: row._count._all,
+      })),
+    };
+  }
+
+  async getTransitHeatTile(params: {
+    z: number;
+    x: number;
+    y: number;
+    versionKey?: string;
+  }) {
+    const resolvedVersion =
+      params.versionKey && params.versionKey.trim().length > 0
+        ? params.versionKey.trim()
+        : (
+            await this.prisma.transitHeatTile.findFirst({
+              where: { isActive: true },
+              orderBy: [{ createdAt: 'desc' }],
+              select: { versionKey: true },
+            })
+          )?.versionKey;
+    if (!resolvedVersion) return null;
+    const exact = await this.prisma.transitHeatTile.findFirst({
+      where: {
+        isActive: true,
+        versionKey: resolvedVersion,
+        z: params.z,
+        x: params.x,
+        y: params.y,
+      },
+      select: {
+        tileData: true,
+        gridSize: true,
+      },
+    });
+    if (exact) {
+      return {
+        tileData: this.normalizeTransitHeatBytes(exact.tileData),
+        gridSize: exact.gridSize,
+      };
+    }
+
+    // Fallback: if an exact tile isn't available (e.g. deeper zoom than precomputed),
+    // project the nearest parent tile into the requested child tile footprint.
+    for (let depth = 1; depth <= params.z; depth += 1) {
+      const scale = 1 << depth;
+      const parentZ = params.z - depth;
+      const parentX = Math.floor(params.x / scale);
+      const parentY = Math.floor(params.y / scale);
+      const parent = await this.prisma.transitHeatTile.findFirst({
+        where: {
+          isActive: true,
+          versionKey: resolvedVersion,
+          z: parentZ,
+          x: parentX,
+          y: parentY,
+        },
+        select: {
+          tileData: true,
+          gridSize: true,
+        },
+      });
+      if (!parent) continue;
+      const childTileX = params.x - parentX * scale;
+      const childTileY = params.y - parentY * scale;
+      const projected = this.projectTransitHeatTileToChild({
+        tileData: new Uint8Array(this.normalizeTransitHeatBytes(parent.tileData)),
+        gridSize: parent.gridSize,
+        depth,
+        childTileX,
+        childTileY,
+      });
+      return {
+        tileData: Buffer.from(projected),
+        gridSize: parent.gridSize,
+      };
+    }
+
+    return null;
+  }
+
+  private normalizeTransitHeatBytes(value: unknown) {
+    if (Buffer.isBuffer(value)) return value;
+    if (value instanceof Uint8Array) return Buffer.from(value);
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (trimmed.startsWith('\\x')) {
+        return Buffer.from(trimmed.slice(2), 'hex');
+      }
+      return Buffer.from(trimmed, 'binary');
+    }
+    return Buffer.alloc(0);
+  }
+
+  private projectTransitHeatTileToChild(params: {
+    tileData: Uint8Array;
+    gridSize: number;
+    depth: number;
+    childTileX: number;
+    childTileY: number;
+  }) {
+    const { tileData, gridSize, depth, childTileX, childTileY } = params;
+    const scale = 1 << depth;
+    const output = new Uint8Array(gridSize * gridSize);
+    const childOffsetX = childTileX * gridSize;
+    const childOffsetY = childTileY * gridSize;
+    for (let row = 0; row < gridSize; row += 1) {
+      for (let col = 0; col < gridSize; col += 1) {
+        const parentCol = Math.max(0, Math.min(gridSize - 1, Math.floor((childOffsetX + col) / scale)));
+        const parentRow = Math.max(0, Math.min(gridSize - 1, Math.floor((childOffsetY + row) / scale)));
+        const sourceIndex = parentRow * gridSize + parentCol;
+        const targetIndex = row * gridSize + col;
+        output[targetIndex] = tileData[sourceIndex] ?? 0;
+      }
+    }
+    return output;
+  }
+
+  private routeTypeHeatWeight(routeType?: number | null) {
+    if (routeType === 1 || routeType === 2) return 1.2;
+    if (routeType === 0) return 0.86;
+    if (routeType === 4) return 0.68;
+    if (routeType === 3) return 0.42;
+    return 0.5;
+  }
+
+  private addHeatKernel(params: {
+    grid: Float32Array;
+    gridSize: number;
+    x: number;
+    y: number;
+    amount: number;
+    radius: number;
+  }) {
+    const { grid, gridSize, x, y, amount, radius } = params;
+    const radiusSquared = radius * radius;
+    for (let dy = -radius; dy <= radius; dy += 1) {
+      const yy = y + dy;
+      if (yy < 0 || yy >= gridSize) continue;
+      for (let dx = -radius; dx <= radius; dx += 1) {
+        const xx = x + dx;
+        if (xx < 0 || xx >= gridSize) continue;
+        const distSquared = dx * dx + dy * dy;
+        if (distSquared > radiusSquared) continue;
+        const falloff = Math.exp(-distSquared / (Math.max(radiusSquared, 1) * 0.9));
+        const index = yy * gridSize + xx;
+        const existing = grid[index];
+        if (existing === undefined) continue;
+        grid[index] = existing + amount * falloff;
+      }
+    }
+  }
+
+  private latLonToCell(bbox: Bbox, gridSize: number, lat: number, lon: number) {
+    const latSpan = Math.max(1e-9, bbox.maxLat - bbox.minLat);
+    const lonSpan = Math.max(1e-9, bbox.maxLon - bbox.minLon);
+    if (lat < bbox.minLat || lat > bbox.maxLat || lon < bbox.minLon || lon > bbox.maxLon) return null;
+    const xRatio = (lon - bbox.minLon) / lonSpan;
+    const yRatio = (lat - bbox.minLat) / latSpan;
+    const x = Math.max(0, Math.min(gridSize - 1, Math.floor(xRatio * gridSize)));
+    // Invert rows so larger latitudes are at smaller row indices.
+    const y = Math.max(0, Math.min(gridSize - 1, gridSize - 1 - Math.floor(yRatio * gridSize)));
+    return { x, y };
   }
 
   async getRoutes(params: {
@@ -740,6 +1059,207 @@ export class GtfsService {
     };
   }
 
+  async getMapTransitHeat(params: {
+    bbox: string;
+    zoom?: number;
+    gridSize?: number;
+    routeLimit?: number;
+    shapeLimit?: number;
+    stopLimit?: number;
+    serviceAware?: boolean;
+  }) {
+    const zoom = params.zoom ?? 11;
+    const bbox = this.parseBbox(params.bbox);
+    if (!bbox) {
+      return {
+        bbox: params.bbox,
+        zoom,
+        gridSize: params.gridSize ?? this.heatGridSizeForZoom(zoom),
+        cells: [],
+        count: 0,
+        maxScore: 0,
+      };
+    }
+
+    const activeFeedVersions = await this.prisma.gtfsFeedVersion.findMany({
+      where: { isActive: true },
+      select: { id: true, importedAt: true },
+    });
+    if (activeFeedVersions.length === 0) {
+      return {
+        bbox: params.bbox,
+        zoom,
+        gridSize: params.gridSize ?? this.heatGridSizeForZoom(zoom),
+        cells: [],
+        count: 0,
+        maxScore: 0,
+      };
+    }
+
+    const routeLimit = Math.min(params.routeLimit ?? 1200, 5000);
+    const shapeLimit = Math.min(params.shapeLimit ?? 500, 2500);
+    const stopLimit = Math.min(params.stopLimit ?? 3000, 15_000);
+    const serviceAware = params.serviceAware === true;
+    const gridSize = Math.max(24, Math.min(params.gridSize ?? this.heatGridSizeForZoom(zoom), 96));
+    const activeFeeds = this.activeFeedFingerprint(activeFeedVersions);
+    const cacheKey = this.buildMapTransitHeatCacheKey({
+      bbox,
+      zoom,
+      gridSize,
+      routeLimit,
+      shapeLimit,
+      stopLimit,
+      serviceAware,
+      activeFeeds,
+    });
+    const cached = this.readMapTransitHeatCache(cacheKey);
+    if (cached) return cached;
+
+    const routePayload = (await this.getMapRouteLines({
+      bbox: params.bbox,
+      zoom,
+      routeLimit,
+      shapeLimit,
+    })) as {
+      lines?: MapRouteLine[];
+      counts?: { routes?: number; lines?: number };
+    };
+    const stopPayload = (await this.getMapStops({
+      bbox: params.bbox,
+      zoom,
+      stopLimit,
+    })) as {
+      stops?: Array<{ stopLat: number; stopLon: number }>;
+      count?: number;
+    };
+    const lines = routePayload.lines ?? [];
+
+    const routeServiceBoostByKey = new Map<string, number>();
+    if (serviceAware && lines.length > 0) {
+      const routePairs = [...new Set(lines.map((line) => `${line.feedVersionId}::${line.routeId}`))].map((routeKey) => {
+        const [feedVersionId, routeId] = routeKey.split('::');
+        return { feedVersionId: feedVersionId as string, routeId: routeId as string };
+      });
+      if (routePairs.length > 0) {
+        const tripCounts = await this.prisma.gtfsTrip.groupBy({
+          by: ['feedVersionId', 'routeId'],
+          where: { OR: routePairs },
+          orderBy: [{ feedVersionId: 'asc' }, { routeId: 'asc' }],
+          _count: { _all: true },
+          take: 120_000,
+        });
+        let maxTripCount = 0;
+        for (const row of tripCounts) {
+          const count = row._count?._all ?? 0;
+          if (count > maxTripCount) maxTripCount = count;
+        }
+        if (maxTripCount > 0) {
+          for (const row of tripCounts) {
+            const count = row._count?._all ?? 0;
+            const normalized = Math.max(0, Math.min(1, count / maxTripCount));
+            const boost = 1 + 0.65 * Math.pow(normalized, 0.62);
+            routeServiceBoostByKey.set(`${row.feedVersionId}::${row.routeId}`, boost);
+          }
+        }
+      }
+    }
+
+    const grid = new Float32Array(gridSize * gridSize);
+    for (const line of lines) {
+      if (!line.points || line.points.length < 2) continue;
+      const routeKey = `${line.feedVersionId}::${line.routeId}`;
+      const serviceBoost = routeServiceBoostByKey.get(routeKey) ?? 1;
+      const routeWeight = this.routeTypeHeatWeight(line.routeType) * serviceBoost;
+      for (let index = 1; index < line.points.length; index += 1) {
+        const previous = line.points[index - 1];
+        const current = line.points[index];
+        if (!previous || !current) continue;
+        const latDelta = Math.abs(current[0] - previous[0]);
+        const lonDelta = Math.abs(current[1] - previous[1]);
+        const steps = Math.max(1, Math.ceil(Math.max(latDelta, lonDelta) * gridSize * 1.9));
+        for (let step = 0; step <= steps; step += 1) {
+          const t = step / steps;
+          const sampleLat = previous[0] + (current[0] - previous[0]) * t;
+          const sampleLon = previous[1] + (current[1] - previous[1]) * t;
+          const cell = this.latLonToCell(bbox, gridSize, sampleLat, sampleLon);
+          if (!cell) continue;
+          this.addHeatKernel({
+            grid,
+            gridSize,
+            x: cell.x,
+            y: cell.y,
+            amount: routeWeight * 0.26,
+            radius: routeWeight >= 1 ? 2 : 1,
+          });
+        }
+      }
+    }
+
+    const stops = stopPayload.stops ?? [];
+    for (const stop of stops) {
+      const cell = this.latLonToCell(bbox, gridSize, stop.stopLat, stop.stopLon);
+      if (!cell) continue;
+      this.addHeatKernel({
+        grid,
+        gridSize,
+        x: cell.x,
+        y: cell.y,
+        amount: 0.3,
+        radius: 1,
+      });
+    }
+
+    let maxScore = 0;
+    for (const score of grid) {
+      if (score > maxScore) maxScore = score;
+    }
+
+    const latSpan = bbox.maxLat - bbox.minLat;
+    const lonSpan = bbox.maxLon - bbox.minLon;
+    const cellLatSpan = latSpan / gridSize;
+    const cellLonSpan = lonSpan / gridSize;
+    const cells: MapTransitHeatCell[] = [];
+    if (maxScore > 0) {
+      const minVisibleScore = maxScore * 0.07;
+      for (let row = 0; row < gridSize; row += 1) {
+        for (let col = 0; col < gridSize; col += 1) {
+          const rawScore = grid[row * gridSize + col] ?? 0;
+          if (rawScore < minVisibleScore) continue;
+          const normalized = rawScore / maxScore;
+          // Gamma curve keeps medium-intensity corridors visible on dark basemaps.
+          const intensity = Math.pow(normalized, 0.74);
+          const centerLat = bbox.maxLat - (row + 0.5) * cellLatSpan;
+          const centerLon = bbox.minLon + (col + 0.5) * cellLonSpan;
+          cells.push({
+            lat: centerLat,
+            lon: centerLon,
+            intensity,
+            rawScore,
+            cellLatSpan,
+            cellLonSpan,
+          });
+        }
+      }
+    }
+
+    const payload: Record<string, unknown> = {
+      bbox: params.bbox,
+      zoom,
+      gridSize,
+      serviceAware,
+      maxScore: Number(maxScore.toFixed(6)),
+      cells,
+      count: cells.length,
+      sourceCounts: {
+        routes: routePayload.counts?.routes ?? 0,
+        lines: routePayload.counts?.lines ?? lines.length,
+        stops: stopPayload.count ?? stops.length,
+      },
+    };
+    this.writeMapTransitHeatCache(cacheKey, payload);
+    return payload;
+  }
+
   async getMapRouteDetails(params: { feedVersionId: string; routeId: string }) {
     const route = await this.prisma.gtfsRoute.findUnique({
       where: {
@@ -817,6 +1337,8 @@ export class GtfsService {
         stopName: string | null;
         platformCode: string | null;
         wheelchairBoarding: number | null;
+        stopLat: number | null;
+        stopLon: number | null;
       };
     };
     const routePathStopTimes: PathStopTimeRow[] = representativeTrip
@@ -834,6 +1356,8 @@ export class GtfsService {
                 stopName: true,
                 platformCode: true,
                 wheelchairBoarding: true,
+                stopLat: true,
+                stopLon: true,
               },
             },
           },
@@ -892,6 +1416,7 @@ export class GtfsService {
       directionIds: distinctDirectionIds,
       headsigns: uniqueHeadsigns.slice(0, 10),
       sampleTrips: sampleTripNames,
+      censusContext: null,
       routePath: representativeTrip
         ? {
             tripId: representativeTrip.tripId,
@@ -1324,6 +1849,7 @@ export class GtfsService {
         })
       : [];
     const currentStopSequence = primaryRoutePathStopTimes.find((row) => row.stopId === params.stopId)?.stopSequence ?? null;
+    const censusContext = await this.censusBoundaryService.lookupByLatLon(stop.stopLat, stop.stopLon);
 
     return {
       feedVersionId: stop.feedVersionId,
@@ -1343,6 +1869,7 @@ export class GtfsService {
         ...stop.feedVersion.agency,
         ridership: this.extractAgencyRidership(stop.feedVersion.agency.raw),
       },
+      censusContext,
       counts: {
         trips: tripIds.length,
         routes: routesById.size,

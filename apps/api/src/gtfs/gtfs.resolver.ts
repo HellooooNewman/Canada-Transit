@@ -107,6 +107,19 @@ export class GtfsResolver {
     return this.gtfsService.getMapRouteLines({ bbox, zoom, routeLimit, shapeLimit });
   }
 
+  @Query(() => GraphQLJSON, { name: 'mapTransitHeat' })
+  mapTransitHeat(
+    @Args('bbox', { type: () => String }) bbox: string,
+    @Args('zoom', { type: () => Int, nullable: true, defaultValue: 11 }) zoom?: number,
+    @Args('gridSize', { type: () => Int, nullable: true }) gridSize?: number,
+    @Args('routeLimit', { type: () => Int, nullable: true, defaultValue: 1200 }) routeLimit?: number,
+    @Args('shapeLimit', { type: () => Int, nullable: true, defaultValue: 500 }) shapeLimit?: number,
+    @Args('stopLimit', { type: () => Int, nullable: true, defaultValue: 3000 }) stopLimit?: number,
+    @Args('serviceAware', { type: () => Boolean, nullable: true, defaultValue: false }) serviceAware?: boolean,
+  ) {
+    return this.gtfsService.getMapTransitHeat({ bbox, zoom, gridSize, routeLimit, shapeLimit, stopLimit, serviceAware });
+  }
+
   @Query(() => GraphQLJSON, { name: 'mapRouteDetails' })
   mapRouteDetails(
     @Args('feedVersionId', { type: () => String }) feedVersionId: string,

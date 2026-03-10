@@ -13,6 +13,7 @@ type Query {
   mapDiscovery(bbox: String!, zoom: Int = 11, routeLimit: Int = 4000, stopLimit: Int = 3000): JSON!
   mapStops(bbox: String!, zoom: Int = 11, stopLimit: Int = 3000): JSON!
   mapRouteLines(bbox: String!, zoom: Int = 10, routeLimit: Int = 1200, shapeLimit: Int = 300): JSON!
+  mapTransitHeat(bbox: String!, zoom: Int = 11, gridSize: Int, routeLimit: Int = 1200, shapeLimit: Int = 500, stopLimit: Int = 3000, serviceAware: Boolean = false): JSON!
   mapRouteDetails(feedVersionId: String!, routeId: String!): JSON!
   mapRouteServiceStats(feedVersionId: String!, routeId: String!, serviceDate: String): JSON!
   mapStopDetails(feedVersionId: String!, stopId: String!): JSON!

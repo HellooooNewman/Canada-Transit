@@ -111,7 +111,7 @@
   .hero {
     border: 1px solid rgba(118, 150, 205, 0.34);
     border-radius: 0.85rem;
-    background: #101d34;
+    background: var(--surface-1);
     box-shadow: inset 0 0 0 1px rgba(181, 206, 245, 0.08);
     padding: 1rem 1.1rem 1.05rem;
     margin-bottom: 1rem;
@@ -124,25 +124,25 @@
     font-weight: 700;
     letter-spacing: 0.11em;
     text-transform: uppercase;
-    color: #8eb7fb;
+    color: var(--accent);
   }
 
   .hero h2 {
     margin: 0;
-    color: #f7fbff;
+    color: var(--text-primary);
   }
 
   .hero p {
     margin-bottom: 0;
     margin-top: 0.45rem;
-    color: #bed2f5;
+    color: var(--text-secondary);
   }
 
   .panel {
     border: 1px solid rgba(109, 144, 202, 0.34);
     border-radius: 0.9rem;
-    background: #0d172b;
-    box-shadow: 0 12px 30px rgba(1, 7, 20, 0.32);
+    background: var(--surface-2);
+    box-shadow: 0 12px 30px var(--shadow-soft);
     overflow: hidden;
   }
 
@@ -157,15 +157,15 @@
 
   .panel-head h3 {
     margin: 0;
-    color: #ecf3ff;
+    color: var(--text-primary);
   }
 
   .count-pill {
-    border: 1px solid rgba(121, 158, 220, 0.56);
+    border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border-primary));
     border-radius: 999px;
-    background: rgba(18, 37, 71, 0.82);
+    background: color-mix(in srgb, var(--surface-3) 86%, transparent);
     padding: 0.2rem 0.52rem;
-    color: #c7dcff;
+    color: var(--text-primary);
     font-size: 0.76rem;
     font-weight: 600;
   }
@@ -184,13 +184,13 @@
     gap: 0.45rem;
     border: 1px solid rgba(105, 144, 206, 0.45);
     border-radius: 0.56rem;
-    background: #0c1b33;
+    background: var(--surface-input);
     box-shadow: inset 0 1px 0 rgba(208, 225, 255, 0.04);
     padding: 0.12rem 0.18rem 0.12rem 0.58rem;
   }
 
   .search-icon {
-    color: #8cb4f8;
+    color: var(--accent);
     font-size: 0.8rem;
     line-height: 1;
   }
@@ -202,13 +202,13 @@
     border: 0;
     border-radius: 0.45rem;
     background: transparent;
-    color: #dbe6ff;
+    color: var(--text-primary);
     font-size: 0.9rem;
     outline: none;
   }
 
   input::placeholder {
-    color: #85a5d7;
+    color: var(--text-muted);
   }
 
   .province-wrap {
@@ -220,7 +220,7 @@
     font-size: 0.62rem;
     letter-spacing: 0.06em;
     text-transform: uppercase;
-    color: #87abdf;
+    color: var(--text-muted);
     font-weight: 700;
     margin-left: 0.15rem;
   }
@@ -229,8 +229,8 @@
     min-width: 6.2rem;
     border: 1px solid rgba(110, 145, 202, 0.5);
     border-radius: 0.5rem;
-    background: #10213e;
-    color: #dbe8ff;
+    background: var(--surface-input-strong);
+    color: var(--text-primary);
     padding: 0.46rem 0.5rem;
     font-size: 0.82rem;
     outline: none;
@@ -239,8 +239,8 @@
   .clear-btn {
     border: 1px solid rgba(116, 149, 207, 0.52);
     border-radius: 0.5rem;
-    background: #11284a;
-    color: #d7e6ff;
+    background: var(--surface-3);
+    color: var(--text-primary);
     padding: 0.48rem 0.62rem;
     font-size: 0.8rem;
     font-weight: 600;
@@ -255,7 +255,7 @@
 
   .results-hint {
     margin: 0.48rem 1rem 0;
-    color: #93b3e5;
+    color: var(--text-muted);
     font-size: 0.76rem;
   }
 
@@ -271,7 +271,7 @@
     border-left: 3px solid rgba(96, 165, 250, 0.7);
     border-radius: 0.72rem;
     padding: 0.7rem 0.72rem 0.72rem;
-    background: #12213c;
+    background: var(--surface-3);
     display: flex;
     flex-direction: column;
     gap: 0.55rem;
@@ -296,20 +296,25 @@
 
   .agency-card-head strong {
     line-height: 1.2;
-    color: #f4f8ff;
+    color: var(--text-primary);
   }
 
   .agency-province {
-    border: 1px solid rgba(124, 163, 226, 0.52);
+    border: 1px solid color-mix(in srgb, var(--accent) 46%, var(--border-primary));
     border-radius: 999px;
-    background: rgba(17, 37, 70, 0.8);
-    color: #b7d1ff;
+    background: color-mix(in srgb, var(--surface-input-strong) 90%, transparent);
+    color: var(--text-primary);
     font-size: 0.68rem;
     font-weight: 700;
     letter-spacing: 0.04em;
     text-transform: uppercase;
     padding: 0.14rem 0.42rem;
     flex-shrink: 0;
+  }
+
+  :global(html[data-theme='light']) .count-pill,
+  :global(html[data-theme='light']) .agency-province {
+    background: rgba(236, 244, 255, 0.95);
   }
 
   .agency-meta-grid {
@@ -323,15 +328,15 @@
     border: 1px solid rgba(105, 137, 194, 0.22);
     border-radius: 0.52rem;
     padding: 0.3rem 0.46rem;
-    background: #0e1b33;
-    color: #adc0ea;
+    background: var(--surface-input);
+    color: var(--text-secondary);
     font-size: 0.81rem;
     line-height: 1.22;
     overflow-wrap: anywhere;
   }
 
   .agency-meta-grid small {
-    color: #7fa4de;
+    color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.06em;
     font-size: 0.62rem;
@@ -339,7 +344,7 @@
   }
 
   .empty {
-    color: #b7cbef;
+    color: var(--text-secondary);
     margin: 0;
     padding: 0.35rem;
   }

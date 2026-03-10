@@ -505,3 +505,22 @@ model GtfsRawTableRow {
   @@unique([feedVersionId, tableName, rowIndex])
   @@index([feedVersionId, tableName])
 }
+
+model TransitHeatTile {
+  id          String   @id @default(cuid())
+  versionKey  String
+  isActive    Boolean  @default(true)
+  z           Int
+  x           Int
+  y           Int
+  gridSize    Int
+  tileData    Bytes
+  maxValue    Float
+  sourceMeta  Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([versionKey, z, x, y])
+  @@index([isActive, z, x, y])
+  @@index([versionKey, z])
+}

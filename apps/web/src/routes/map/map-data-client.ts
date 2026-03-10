@@ -64,6 +64,27 @@ type StopPoint = {
   agencyName?: string | null;
 };
 
+type TransitHeatCell = {
+  lat: number;
+  lon: number;
+  intensity: number;
+  rawScore: number;
+  cellLatSpan: number;
+  cellLonSpan: number;
+};
+
+type MapTransitHeatPayload = {
+  gridSize?: number;
+  maxScore?: number;
+  count?: number;
+  cells?: TransitHeatCell[];
+  sourceCounts?: {
+    routes?: number;
+    lines?: number;
+    stops?: number;
+  };
+};
+
 function bboxToString(bbox: BboxRect) {
   return `${bbox.minLat},${bbox.minLon},${bbox.maxLat},${bbox.maxLon}`;
 }
@@ -127,6 +148,62 @@ export async function fetchStopsForBbox(bbox: BboxRect, zoom: number, abortSigna
   return {
     payload,
     elapsedMs: Math.round(performance.now() - stopStart),
+    payloadBytes: new Blob([JSON.stringify(payload)]).size,
+  };
+}
+
+export async function fetchTransitHeatForBbox(
+  bbox: BboxRect,
+  zoom: number,
+  abortSignal: AbortSignal,
+  options?: {
+    gridSize?: number;
+    routeLimit?: number;
+    shapeLimit?: number;
+    stopLimit?: number;
+    serviceAware?: boolean;
+  },
+) {
+  const heatStart = performance.now();
+  const result = await graphqlRequest<{ mapTransitHeat: MapTransitHeatPayload }>(
+    (input: RequestInfo | URL, init?: RequestInit) =>
+      fetch(input, {
+        ...init,
+        signal: abortSignal,
+      }),
+    `query MapTransitHeat(
+      $bbox: String!
+      $zoom: Int!
+      $gridSize: Int
+      $routeLimit: Int!
+      $shapeLimit: Int!
+      $stopLimit: Int!
+      $serviceAware: Boolean!
+    ) {
+      mapTransitHeat(
+        bbox: $bbox
+        zoom: $zoom
+        gridSize: $gridSize
+        routeLimit: $routeLimit
+        shapeLimit: $shapeLimit
+        stopLimit: $stopLimit
+        serviceAware: $serviceAware
+      )
+    }`,
+    {
+      bbox: bboxToString(bbox),
+      zoom,
+      gridSize: options?.gridSize ?? null,
+      routeLimit: options?.routeLimit ?? routeLimitForZoom(zoom),
+      shapeLimit: options?.shapeLimit ?? shapeLimitForZoom(zoom),
+      stopLimit: options?.stopLimit ?? stopLimitForZoom(zoom),
+      serviceAware: options?.serviceAware ?? false,
+    },
+  );
+  const payload = result.mapTransitHeat ?? { cells: [] };
+  return {
+    payload,
+    elapsedMs: Math.round(performance.now() - heatStart),
     payloadBytes: new Blob([JSON.stringify(payload)]).size,
   };
 }

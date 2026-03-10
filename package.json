@@ -14,6 +14,7 @@
     "smoke:gtfs": "pnpm --filter @ttc/api exec tsx ../../scripts/smoke/gtfs-smoke.ts",
     "smoke:corridors": "pnpm --filter @ttc/api exec tsx ../../scripts/smoke/map-corridor-smoke.ts",
     "integration:ca-realtime": "pnpm --filter @ttc/api exec tsx ../../scripts/integration/build-ca-realtime-map.ts",
+    "integration:transit-heat": "pnpm --filter @ttc/api exec tsx ../../scripts/integration/build-transit-heat-tiles.ts",
     "db:clear": "pnpm --filter @ttc/api exec prisma migrate reset --schema ../../prisma/schema.prisma --force --skip-seed",
     "db:reset": "pnpm --filter @ttc/api exec prisma migrate reset --schema ../../prisma/schema.prisma --force"
   },

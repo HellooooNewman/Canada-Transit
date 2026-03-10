@@ -352,14 +352,14 @@
 
 <style>
   .hero {
-    border: 1px solid #24324a;
+    border: 1px solid var(--border-primary);
     border-radius: 0.75rem;
-    background: linear-gradient(135deg, #0e1a31, #111d38);
+    background: var(--surface-1);
     padding: 1rem 1.1rem;
     margin-bottom: 1rem;
   }
   .hero p {
-    color: #b8c8eb;
+    color: var(--text-secondary);
   }
   .toolbar {
     display: flex;
@@ -375,10 +375,10 @@
   }
   select,
   button {
-    border: 1px solid #2f4468;
+    border: 1px solid var(--border-primary);
     border-radius: 0.45rem;
-    background: #0d1730;
-    color: #dbe6ff;
+    background: var(--surface-input-strong);
+    color: var(--text-primary);
     padding: 0.55rem 0.65rem;
   }
   .summary {
@@ -387,9 +387,9 @@
     gap: 0.7rem;
   }
   .summary article {
-    border: 1px solid #2a3650;
+    border: 1px solid var(--border-primary);
     border-radius: 0.6rem;
-    background: #101b31;
+    background: var(--surface-2);
     padding: 0.7rem;
   }
   .summary p {
@@ -397,7 +397,7 @@
     margin: 0.35rem 0 0;
   }
   .summary small {
-    color: #8fa5cc;
+    color: var(--text-muted);
     display: block;
     margin-top: 0.35rem;
   }
@@ -408,9 +408,9 @@
     gap: 0.7rem;
   }
   .breakdown article {
-    border: 1px solid #2a3650;
+    border: 1px solid var(--border-primary);
     border-radius: 0.6rem;
-    background: #101b31;
+    background: var(--surface-2);
     padding: 0.7rem;
   }
   ul {
@@ -424,7 +424,7 @@
     display: flex;
     justify-content: space-between;
     gap: 0.7rem;
-    color: #b8c8eb;
+    color: var(--text-secondary);
   }
   .details {
     margin-top: 0.8rem;
@@ -433,9 +433,9 @@
     gap: 0.8rem;
   }
   .panel {
-    border: 1px solid #2a3650;
+    border: 1px solid var(--border-primary);
     border-radius: 0.6rem;
-    background: #101b31;
+    background: var(--surface-2);
     padding: 0.75rem;
   }
   .panel header {
@@ -446,14 +446,14 @@
     margin-bottom: 0.55rem;
   }
   .panel header small {
-    color: #8fa5cc;
+    color: var(--text-muted);
   }
   .panel input {
     width: 100%;
-    border: 1px solid #2f4468;
+    border: 1px solid var(--border-primary);
     border-radius: 0.45rem;
-    background: #0d1730;
-    color: #dbe6ff;
+    background: var(--surface-input);
+    color: var(--text-primary);
     padding: 0.55rem 0.65rem;
     margin-bottom: 0.6rem;
   }
@@ -467,17 +467,17 @@
   }
   th,
   td {
-    border-bottom: 1px solid #253453;
+    border-bottom: 1px solid var(--border-primary);
     text-align: left;
     padding: 0.45rem;
     vertical-align: top;
   }
   th {
-    color: #9fb5de;
+    color: var(--text-muted);
     font-weight: 600;
   }
   .muted {
-    color: #8fa5cc;
+    color: var(--text-muted);
   }
   @media (max-width: 900px) {
     .summary {
@@ -488,6 +488,6 @@
     }
   }
   .error {
-    color: #fca5a5;
+    color: var(--danger);
   }
 </style>

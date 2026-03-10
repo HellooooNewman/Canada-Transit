@@ -32,14 +32,18 @@
     "graphql": "^16.10.0",
     "graphql-type-json": "^0.3.2",
     "gtfs-realtime-bindings": "^1.1.1",
+    "proj4": "^2.20.3",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.1"
+    "rxjs": "^7.8.1",
+    "shapefile": "^0.6.6"
   },
   "devDependencies": {
     "@nestjs/cli": "^11.0.0",
     "@nestjs/schematics": "^11.0.0",
     "@nestjs/testing": "^11.0.1",
+    "@types/adm-zip": "^0.5.7",
     "@types/node": "^22.10.2",
+    "@types/shapefile": "^0.6.4",
     "prisma": "^6.3.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"

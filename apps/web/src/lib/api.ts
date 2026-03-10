@@ -2,6 +2,18 @@ import { env } from '$env/dynamic/public';
 
 const API_BASE_URL = env.PUBLIC_API_BASE_URL || 'http://localhost:3000/api/graphql';
 
+function resolveApiOrigin() {
+  if (API_BASE_URL.endsWith('/graphql')) {
+    return API_BASE_URL.slice(0, -'/graphql'.length);
+  }
+  return API_BASE_URL;
+}
+
+export function apiUrl(path: string) {
+  const normalizedPath = path.startsWith('/') ? path.slice(1) : path;
+  return `${resolveApiOrigin()}/${normalizedPath}`;
+}
+
 export async function graphqlRequest<T>(
   fetchFn: typeof fetch,
   query: string,
