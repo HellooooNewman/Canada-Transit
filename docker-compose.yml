@@ -20,6 +20,8 @@ services:
       NODE_ENV: production
       PORT: 3000
       DATABASE_URL: postgresql://ttc:ttc@postgres:5432/ttc?schema=public
+      CENSUS_BOUNDARY_ZIP_PATH: /data/census/2021/lda_000b21a_e.zip
+      CENSUS_POPULATION_CSV_PATH: /data/census/2021/population_dwelling_counts_da_2021.csv
       TTC_GTFS_RT_ALERTS_URL: https://bustime.ttc.ca/gtfsrt/alerts
       TTC_GTFS_RT_VEHICLES_URL: https://bustime.ttc.ca/gtfsrt/vehicles
       TTC_GTFS_RT_TRIPS_URL: https://bustime.ttc.ca/gtfsrt/trips
@@ -28,6 +30,8 @@ services:
       TTC_GTFS_CKAN_PACKAGE_ID: b811ead4-6eaf-4adb-8408-d389fb5a069c
     ports:
       - '3000:3000'
+    volumes:
+      - ./prisma/data/census/2021:/data/census/2021:ro
     depends_on:
       - postgres
 

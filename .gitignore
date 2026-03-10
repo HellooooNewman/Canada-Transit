@@ -10,3 +10,7 @@ coverage
 *.log
 .DS_Store
 apps/api/prisma/migrations
+
+# Large data files
+prisma/data/census/2021/lda_000b21a_e.zip
+prisma/data/census/2021/population_dwelling_counts_da_2021.csv
