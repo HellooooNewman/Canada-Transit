@@ -13,7 +13,7 @@ services:
     restart: unless-stopped
 
   api:
-    image: yourusername/ttc-api:latest
+    image: helloooooNewman/ttc-api:latest
     container_name: ttc-api
     environment:
       NODE_ENV: production
@@ -39,7 +39,7 @@ services:
     image: yourusername/ttc-web:latest
     container_name: ttc-web
     environment:
-      PUBLIC_API_BASE_URL: http://api:3000/api/graphql
+      PUBLIC_API_BASE_URL: https://transit.kevinnewman.ca/api/graphql
     ports:
       - '5173:4173'
     depends_on:
