@@ -2519,7 +2519,6 @@ export class GtfsService {
     const feedVersionsInView = [
       ...new Set([...stopsInView.map((row) => row.feedVersionId), ...shapeSamplesInView.map((row) => row.feedVersionId)]),
     ];
-    const shapeKeysInView = new Set(shapeSamplesInView.map((row) => `${row.feedVersionId}::${row.shapeId}`));
     if (feedVersionsInView.length === 0) {
       return finalize({
         bbox: params.bbox,
@@ -2657,7 +2656,8 @@ export class GtfsService {
       const routeKey = `${row.feedVersionId}::${row.routeId}`;
       if (!routeByFeedAndRouteId.has(routeKey)) continue;
       const shapeKey = `${row.feedVersionId}::${shapeId}`;
-      if (!shapeKeysInView.has(shapeKey)) continue;
+      // Don't filter shapes based on viewport position - include all shapes for selected routes
+      // This ensures routes that extend beyond the visible area are rendered completely
       const existing = shapeKeysByRouteKey.get(routeKey) ?? [];
       if (!existing.includes(shapeKey)) {
         existing.push(shapeKey);

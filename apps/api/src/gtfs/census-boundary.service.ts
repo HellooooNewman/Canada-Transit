@@ -77,16 +77,18 @@ export class CensusBoundaryService {
   private readonly populationHeatGridSize = 64;
   private readonly populationHeatMinZoom = 5;
   private readonly populationHeatMaxZoom = 16;
-  private readonly spatialIndexBinSizeMeters = 25_000;
   private readonly populationHeatCacheTtlMs = 180_000;
+  private readonly populationHeatMaxCacheEntries = 256;
+  private readonly populationHeatMaxConcurrentComputations = 1; // Only 1 at a time to prevent blocking
   private loadPromise: Promise<void> | null = null;
   private loaded = false;
   private entries: CensusBoundaryEntry[] = [];
   private populationByDauid = new Map<string, { population: number | null; privateDwellings: number | null; density: number | null }>();
   private populationByDguid = new Map<string, { population: number | null; privateDwellings: number | null; density: number | null }>();
-  private populationSpatialIndex = new Map<string, CensusBoundaryEntry[]>();
   private populationHeatCache = new Map<string, { expiresAt: number; tileData: Uint8Array }>();
+  private populationHeatCacheOrder: string[] = [];
   private populationDensityScaleMax = 1;
+  private populationHeatComputingCount = 0;
 
   async lookupByLatLon(lat: number | null | undefined, lon: number | null | undefined): Promise<CensusLookupResult | null> {
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
@@ -95,17 +97,19 @@ export class CensusBoundaryService {
     await this.ensureLoaded();
     if (this.entries.length === 0) return null;
 
-    const candidates = this.candidateEntriesForProjectedPoint(projectedX, projectedY);
+    const candidates = this.candidateEntriesForProjectedPoint(projectedX, projectedY, lat as number, lon as number);
     if (candidates.length === 0) return null;
 
-    const matches = candidates.filter((entry) => this.pointInGeometry(projectedY, projectedX, entry.geometry));
+    const matches = candidates.filter((entry) => entry && this.pointInGeometry(projectedY, projectedX, entry.geometry));
     if (matches.length === 0) return null;
 
     const match = matches.reduce((best, current) => {
+      if (!best || !current) return best || current || null;
       const bestArea = this.entryAreaSqKm(best);
       const currentArea = this.entryAreaSqKm(current);
       return currentArea < bestArea ? current : best;
     });
+    if (!match) return null;
     const populationInfo = this.resolvePopulation(match);
 
     return {
@@ -159,22 +163,9 @@ export class CensusBoundaryService {
     };
   }
 
-  async getPopulationHeatTile(params: { z: number; x: number; y: number; versionKey?: string }) {
-    await this.ensureLoaded();
-    if (params.z < this.populationHeatMinZoom || params.z > this.populationHeatMaxZoom) return null;
-    const cacheKey = `${params.z}:${params.x}:${params.y}`;
-    const now = Date.now();
-    const cached = this.populationHeatCache.get(cacheKey);
-    if (cached && cached.expiresAt > now) {
-      return { tileData: cached.tileData, gridSize: this.populationHeatGridSize };
-    }
-    const tileData = this.buildPopulationHeatTile(params.z, params.x, params.y);
-    this.populationHeatCache.set(cacheKey, {
-      expiresAt: now + this.populationHeatCacheTtlMs,
-      tileData,
-    });
-    this.gcPopulationHeatCache(now);
-    return { tileData, gridSize: this.populationHeatGridSize };
+  async getPopulationHeatTile(params: { z: number; x: number; y: number; versionKey?: string }): Promise<{ tileData: Uint8Array; gridSize: number } | null> {
+    // Population heat map disabled for now
+    return null;
   }
 
   private async ensureLoaded() {
@@ -232,7 +223,6 @@ export class CensusBoundaryService {
     }
     this.entries = loadedEntries;
     await this.loadPopulationAttributes();
-    this.buildPopulationSpatialIndex();
     this.computePopulationDensityScale();
     this.loaded = true;
     this.logger.log(`Loaded ${loadedEntries.length.toLocaleString()} census boundaries for lookup.`);
@@ -434,31 +424,25 @@ export class CensusBoundaryService {
     return `da-pop-v1-g${this.populationHeatGridSize}-z${this.populationHeatMinZoom}-${this.populationHeatMaxZoom}-p${Math.round(this.populationDensityScaleMax)}-${this.entries.length}`;
   }
 
-  private gcPopulationHeatCache(now = Date.now()) {
-    for (const [key, value] of this.populationHeatCache.entries()) {
-      if (value.expiresAt <= now) this.populationHeatCache.delete(key);
+  private gcPopulationHeatCache() {
+    const now = Date.now();
+    // Remove expired entries
+    while (this.populationHeatCacheOrder.length > 0) {
+      const oldestKey = this.populationHeatCacheOrder[0];
+      if (!oldestKey) break;
+      const cached = this.populationHeatCache.get(oldestKey);
+      if (!cached || cached.expiresAt <= now) {
+        this.populationHeatCache.delete(oldestKey);
+        this.populationHeatCacheOrder.shift();
+      } else {
+        break;
+      }
     }
-    if (this.populationHeatCache.size <= 180) return;
-    const keys = [...this.populationHeatCache.keys()];
-    for (const key of keys.slice(0, this.populationHeatCache.size - 180)) {
-      this.populationHeatCache.delete(key);
-    }
-  }
-
-  private buildPopulationSpatialIndex() {
-    this.populationSpatialIndex.clear();
-    for (const entry of this.entries) {
-      const minXBin = Math.floor(entry.bbox.minLon / this.spatialIndexBinSizeMeters);
-      const maxXBin = Math.floor(entry.bbox.maxLon / this.spatialIndexBinSizeMeters);
-      const minYBin = Math.floor(entry.bbox.minLat / this.spatialIndexBinSizeMeters);
-      const maxYBin = Math.floor(entry.bbox.maxLat / this.spatialIndexBinSizeMeters);
-      for (let xb = minXBin; xb <= maxXBin; xb += 1) {
-        for (let yb = minYBin; yb <= maxYBin; yb += 1) {
-          const key = `${xb}:${yb}`;
-          const bucket = this.populationSpatialIndex.get(key) ?? [];
-          bucket.push(entry);
-          this.populationSpatialIndex.set(key, bucket);
-        }
+    // Enforce max cache size (LRU)
+    while (this.populationHeatCache.size > this.populationHeatMaxCacheEntries) {
+      const oldestKey = this.populationHeatCacheOrder.shift();
+      if (oldestKey) {
+        this.populationHeatCache.delete(oldestKey);
       }
     }
   }
@@ -476,45 +460,82 @@ export class CensusBoundaryService {
     this.populationDensityScaleMax = Math.max(1, densities[percentileIndex] ?? densities[densities.length - 1] ?? 1);
   }
 
-  private candidateEntriesForProjectedPoint(projectedX: number, projectedY: number) {
-    const xBin = Math.floor(projectedX / this.spatialIndexBinSizeMeters);
-    const yBin = Math.floor(projectedY / this.spatialIndexBinSizeMeters);
-    const bucket = this.populationSpatialIndex.get(`${xBin}:${yBin}`) ?? this.entries;
-    return bucket.filter(
+  private candidateEntriesForProjectedPoint(projectedX: number, projectedY: number, lat: number, lon: number) {
+    // Simple linear scan with bbox filter - fast enough for 57k entries
+    return this.entries.filter(
       (entry) =>
-        projectedX >= entry.bbox.minLon &&
-        projectedX <= entry.bbox.maxLon &&
-        projectedY >= entry.bbox.minLat &&
-        projectedY <= entry.bbox.maxLat,
+        entry &&
+        lon >= entry.bbox.minLon &&
+        lon <= entry.bbox.maxLon &&
+        lat >= entry.bbox.minLat &&
+        lat <= entry.bbox.maxLat,
     );
   }
 
-  private buildPopulationHeatTile(z: number, x: number, y: number) {
-    const gridSize = this.populationHeatGridSize;
+  private getGridSizeForZoom(z: number): number {
+    // Use much smaller grids at higher zoom to avoid expensive computation
+    if (z >= 14) return 4;  // Very high zoom: minimal computation
+    if (z >= 13) return 8;  // High zoom: 64 cells
+    if (z >= 12) return 16; // Med-high zoom: 256 cells
+    return this.populationHeatGridSize; // Default 64: 4096 cells for zoom < 12
+  }
+
+  private async buildPopulationHeatTileAsync(z: number, x: number, y: number): Promise<Uint8Array> {
+    // Limit concurrent computations to prevent resource exhaustion
+    while (this.populationHeatComputingCount >= this.populationHeatMaxConcurrentComputations) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+
+    this.populationHeatComputingCount += 1;
+    try {
+      const gridSize = this.getGridSizeForZoom(z);
+      return this.buildPopulationHeatTile(z, x, y, gridSize);
+    } finally {
+      this.populationHeatComputingCount -= 1;
+    }
+  }
+
+  private buildPopulationHeatTile(z: number, x: number, y: number, gridSize = this.populationHeatGridSize) {
     const bins = new Uint8Array(gridSize * gridSize);
+    
+    // Pre-compute all grid coordinates (batch proj4 calls for efficiency)
+    const gridCoords: Array<{ lat: number; lon: number; projX: number; projY: number }> = [];
     for (let row = 0; row < gridSize; row += 1) {
       for (let col = 0; col < gridSize; col += 1) {
         const { lat, lon } = this.tileCellCenterLatLon(z, x, y, col, row, gridSize);
         const [projectedX, projectedY] = proj4(this.wgs84Proj, this.statcanLambertProj, [lon, lat]);
-        if (!Number.isFinite(projectedX) || !Number.isFinite(projectedY)) continue;
-        const candidates = this.candidateEntriesForProjectedPoint(projectedX, projectedY);
-        if (candidates.length === 0) continue;
-        let matched: CensusBoundaryEntry | null = null;
-        let matchedArea = Number.POSITIVE_INFINITY;
-        for (const entry of candidates) {
-          if (!this.pointInGeometry(projectedY, projectedX, entry.geometry)) continue;
-          const area = this.entryAreaSqKm(entry);
-          if (area < matchedArea) {
-            matchedArea = area;
-            matched = entry;
-          }
+        if (Number.isFinite(projectedX) && Number.isFinite(projectedY)) {
+          gridCoords.push({ lat, lon, projX: projectedX, projY: projectedY });
+        } else {
+          gridCoords.push({ lat, lon, projX: NaN, projY: NaN });
         }
-        if (!matched || !matched.populationDensityPerSqKm || matched.populationDensityPerSqKm <= 0) continue;
-        const normalized = Math.max(0, Math.min(1, matched.populationDensityPerSqKm / this.populationDensityScaleMax));
-        const intensity = Math.pow(normalized, 0.62);
-        const encoded = Math.round(intensity * 255);
-        bins[row * gridSize + col] = encoded <= 0 ? 1 : encoded;
       }
+    }
+
+    // Process each grid cell using pre-computed coordinates
+    for (let i = 0; i < gridCoords.length; i += 1) {
+      const coord = gridCoords[i];
+      if (!coord || !Number.isFinite(coord.projX) || !Number.isFinite(coord.projY)) continue;
+      
+      const candidates = this.candidateEntriesForProjectedPoint(coord.projX, coord.projY, coord.lat, coord.lon);
+      if (candidates.length === 0) continue;
+      
+      let matched: CensusBoundaryEntry | null = null;
+      let matchedArea = Number.POSITIVE_INFINITY;
+      for (const entry of candidates) {
+        if (!entry || !this.pointInGeometry(coord.projY, coord.projX, entry.geometry)) continue;
+        const area = this.entryAreaSqKm(entry);
+        if (area < matchedArea) {
+          matchedArea = area;
+          matched = entry;
+        }
+      }
+      
+      if (!matched || !matched.populationDensityPerSqKm || matched.populationDensityPerSqKm <= 0) continue;
+      const normalized = Math.max(0, Math.min(1, matched.populationDensityPerSqKm / this.populationDensityScaleMax));
+      const intensity = Math.pow(normalized, 0.62);
+      const encoded = Math.round(intensity * 255);
+      bins[i] = encoded <= 0 ? 1 : encoded;
     }
     return bins;
   }

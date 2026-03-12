@@ -468,6 +468,7 @@
   }> = [];
   let animateVehicles = true;
   let transitHeatEnabled = true;
+  let showStats = false;
   let transitHeatLegendCollapsed = false;
   let transitHeatVersionKey: string | null = null;
   let transitHeatHealth: TransitHeatHealth | null = null;
@@ -3090,20 +3091,33 @@
     {/if}
   </form>
   <div class="overlay-stack overlay-stack-right">
-    <div class="overlay mode">
-      {#each modePills as pill}
-        <span class="mode-pill">{pill}</span>
-      {/each}
-      <span class="mode-pill">z{currentZoom}</span>
+    <div class="overlay-header">
+      <div class="overlay mode">
+        {#each modePills as pill}
+          <span class="mode-pill">{pill}</span>
+        {/each}
+        <span class="mode-pill">z{currentZoom}</span>
+      </div>
+      <button type="button" class="overlay-stats-toggle" on:click={() => (showStats = !showStats)} aria-label="Toggle stats" title="Toggle stats">
+        ℹ️
+      </button>
     </div>
-    <div class="overlay stats">
-      routes {renderMetrics.routeLoadMs}ms / {(renderMetrics.routePayloadBytes / 1024).toFixed(1)}KB · stops {renderMetrics.stopLoadMs}ms /
-      {(renderMetrics.stopPayloadBytes / 1024).toFixed(1)}KB
+    {#if showStats}
+      <div class="overlay stats">
+        routes {renderMetrics.routeLoadMs}ms / {(renderMetrics.routePayloadBytes / 1024).toFixed(1)}KB · stops {renderMetrics.stopLoadMs}ms /
+        {(renderMetrics.stopPayloadBytes / 1024).toFixed(1)}KB
+      </div>
+    {/if}
+    <div class="overlay-toggles">
+      <label class="overlay heat-toggle">
+        <input type="checkbox" checked={transitHeatEnabled} on:change={onToggleTransitHeat} />
+        <span>Transit heatmap</span>
+      </label>
+      <label class="overlay anim-toggle">
+        <input type="checkbox" checked={animateVehicles} on:change={onToggleVehicleAnimation} />
+        <span>Animate vehicles</span>
+      </label>
     </div>
-    <label class="overlay heat-toggle">
-      <input type="checkbox" checked={transitHeatEnabled} on:change={onToggleTransitHeat} />
-      Transit density heatmap (underlay)
-    </label>
     {#if transitHeatEnabled}
       <div class="overlay heat-legend">
         <div class="heat-legend-header">
@@ -3139,51 +3153,6 @@
         {/if}
       </div>
     {/if}
-    <label class="overlay heat-toggle">
-      <input type="checkbox" checked={populationHeatEnabled} on:change={onTogglePopulationHeat} />
-      Population density heatmap (underlay)
-    </label>
-    {#if populationHeatEnabled}
-      <div class="overlay heat-legend">
-        <div class="heat-legend-header">
-          <strong>Population density</strong>
-          <div class="heat-legend-header-controls">
-            <span>v{heatVersionLabel(populationHeatHealth?.versionKey)}</span>
-            <button
-              type="button"
-              class="heat-legend-collapse-btn"
-              on:click={onTogglePopulationHeatLegend}
-              aria-expanded={!populationHeatLegendCollapsed}
-              aria-label={populationHeatLegendCollapsed ? 'Expand population legend' : 'Collapse population legend'}
-            >
-              {populationHeatLegendCollapsed ? 'Show' : 'Hide'}
-            </button>
-          </div>
-        </div>
-        {#if !populationHeatLegendCollapsed}
-          <div class="heat-legend-ramp population-heat-legend-ramp" aria-hidden="true"></div>
-          <div class="heat-legend-scale">
-            <span>low</span>
-            <span>high</span>
-          </div>
-          <div class="heat-legend-meta">
-            {#if populationHeatHealth}
-              z{populationHeatHealth.minZoom ?? '?'}-{populationHeatHealth.maxZoom ?? '?'} ·
-              {populationHeatHealth.polygonsWithPopulation.toLocaleString()} areas ·
-              max {Math.round(populationHeatHealth.maxDensityScale).toLocaleString()} /km²
-            {:else if populationHeatHealthError}
-              {populationHeatHealthError}
-            {:else}
-              Loading population metadata...
-            {/if}
-          </div>
-        {/if}
-      </div>
-    {/if}
-    <label class="overlay anim-toggle">
-      <input type="checkbox" checked={animateVehicles} on:change={onToggleVehicleAnimation} />
-      Animate fallback marker (when no live vehicles)
-    </label>
   </div>
   {#if detailKind}
     <div
@@ -3695,7 +3664,7 @@
     z-index: 520;
     display: flex;
     flex-direction: column;
-    gap: 0.42rem;
+    gap: 0.24rem;
   }
 
   .overlay-stack-right {
@@ -3708,12 +3677,51 @@
   .overlay.mode {
     display: inline-flex;
     align-items: center;
-    gap: 0.35rem;
+    gap: 0.28rem;
     flex-wrap: wrap;
     justify-content: flex-end;
     position: static;
     max-width: 100%;
-    padding: 0.28rem 0.35rem;
+    padding: 0;
+    border: none;
+    background: none;
+    box-shadow: none;
+  }
+
+  .overlay-header {
+    display: flex;
+    align-items: center;
+    gap: 0.32rem;
+    justify-content: flex-end;
+  }
+
+  .overlay-stats-toggle {
+    border: 1px solid var(--border-primary);
+    background: color-mix(in srgb, var(--surface-3) 88%, transparent);
+    color: var(--text-secondary);
+    border-radius: 0.35rem;
+    width: 1.65rem;
+    height: 1.65rem;
+    padding: 0;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.9rem;
+    flex-shrink: 0;
+    transition: background 200ms ease, color 200ms ease;
+  }
+
+  .overlay-stats-toggle:hover {
+    background: color-mix(in srgb, var(--surface-3) 94%, transparent);
+    color: var(--text-primary);
+  }
+
+  .overlay-toggles {
+    display: flex;
+    flex-direction: column;
+    gap: 0.32rem;
+    position: static;
   }
 
   .overlay.city-search {
@@ -3780,8 +3788,9 @@
   }
 
   .overlay.loading {
-    top: 2.95rem;
-    right: 0.8rem;
+    z-index: 530;
+    bottom: 0.8rem;
+    left: 0.8rem;
     display: flex;
     align-items: center;
     gap: 0.45rem;
@@ -3836,29 +3845,50 @@
   .overlay.stats {
     position: static;
     max-width: 100%;
-    font-size: 0.72rem;
+    font-size: 0.70rem;
     color: var(--text-secondary);
+    padding: 0.32rem 0.44rem;
   }
 
   .overlay.heat-toggle,
   .overlay.anim-toggle {
     position: static;
-    display: inline-flex;
+    display: flex;
     align-items: center;
-    gap: 0.45rem;
-    font-size: 0.78rem;
+    gap: 0.32rem;
+    font-size: 0.74rem;
     user-select: none;
     cursor: pointer;
+    padding: 0.32rem 0.44rem;
+    border-radius: 0.35rem;
+    border: 1px solid var(--border-primary);
+    background: color-mix(in srgb, var(--surface-3) 68%, transparent);
+    margin: 0;
+    transition: background 200ms ease;
+  }
+
+  .overlay.heat-toggle:hover,
+  .overlay.anim-toggle:hover {
+    background: color-mix(in srgb, var(--surface-3) 78%, transparent);
+  }
+
+  .overlay.heat-toggle span,
+  .overlay.anim-toggle span {
+    color: var(--text-primary);
   }
 
   .overlay.heat-legend {
     position: static;
-    width: 15.8rem;
+    width: 16rem;
     max-width: 100%;
     display: grid;
     gap: 0.32rem;
-    padding: 0.44rem 0.55rem 0.48rem;
+    padding: 0.44rem 0.55rem 0.52rem;
     font-size: 0.72rem;
+    border: 1px solid var(--border-primary);
+    border-radius: 0.45rem;
+    background: color-mix(in srgb, var(--surface-2) 88%, transparent);
+    box-shadow: 0 6px 20px rgba(2, 8, 24, 0.26);
   }
 
   .heat-legend-header {
@@ -3932,10 +3962,6 @@
   .heat-legend-meta {
     color: var(--text-secondary);
     font-size: 0.67rem;
-  }
-
-  .overlay.anim-toggle {
-    max-width: 100%;
   }
 
   .overlay.heat-toggle input,

@@ -1,0 +1,50 @@
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    container_name: ttc-postgres
+    environment:
+      POSTGRES_DB: ttc
+      POSTGRES_USER: ttc
+      POSTGRES_PASSWORD: ttc
+    ports:
+      - '5432:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  api:
+    image: yourusername/ttc-api:latest
+    container_name: ttc-api
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://ttc:ttc@postgres:5432/ttc?schema=public
+      CENSUS_BOUNDARY_ZIP_PATH: /data/census/2021/lda_000b21a_e.zip
+      CENSUS_POPULATION_CSV_PATH: /data/census/2021/population_dwelling_counts_da_2021.csv
+      TTC_GTFS_RT_ALERTS_URL: https://bustime.ttc.ca/gtfsrt/alerts
+      TTC_GTFS_RT_VEHICLES_URL: https://bustime.ttc.ca/gtfsrt/vehicles
+      TTC_GTFS_RT_TRIPS_URL: https://bustime.ttc.ca/gtfsrt/trips
+      TTC_GTFS_STATIC_SOURCE: direct
+      TTC_GTFS_STATIC_FEED_URL: ''
+      TTC_GTFS_CKAN_PACKAGE_ID: b811ead4-6eaf-4adb-8408-d389fb5a069c
+    ports:
+      - '3000:3000'
+    volumes:
+      - /volume1/docker/ttc-viewer/data:/data:ro
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+  web:
+    image: yourusername/ttc-web:latest
+    container_name: ttc-web
+    environment:
+      PUBLIC_API_BASE_URL: http://api:3000/api/graphql
+    ports:
+      - '5173:4173'
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  pgdata:
