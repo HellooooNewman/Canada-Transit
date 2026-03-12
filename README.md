@@ -1,4 +1,4 @@
-# TTC Viewer
+# Canada Transit
 
 A monorepo project for viewing and analyzing transit data across Canadian transit agencies, with census boundary and population density analysis.
 
