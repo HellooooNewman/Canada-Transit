@@ -180,11 +180,14 @@ export class CensusBoundaryService {
   }
 
   private async loadEntries() {
+    const startTime = Date.now();
+    this.logger.log('[CensusBoundaryService] Loading census boundaries...');
+
     const zipPath = await this.resolveZipPath();
     if (!zipPath) {
       this.loaded = true;
       this.entries = [];
-      this.logger.warn('No census boundary ZIP found; continuing without census boundary lookups.');
+      this.logger.warn('[CensusBoundaryService] No census boundary ZIP found; continuing without census boundary lookups.');
       return;
     }
 
@@ -193,11 +196,15 @@ export class CensusBoundaryService {
     const dbfPath = path.join(this.extractedDir, this.extractedDbfName);
     const [hasShp, hasDbf] = await Promise.all([this.pathExists(shpPath), this.pathExists(dbfPath)]);
     if (!hasShp || !hasDbf) {
-      this.logger.log(`Extracting census boundaries from ${zipPath}`);
+      const extractStartTime = Date.now();
+      this.logger.log(`[CensusBoundaryService] Extracting census boundaries from ${zipPath}`);
       const zip = new AdmZip(zipPath);
       zip.extractAllTo(this.extractedDir, true);
+      const extractDurationMs = Date.now() - extractStartTime;
+      this.logger.log(`[CensusBoundaryService] Extraction completed in ${extractDurationMs}ms`);
     }
 
+    const parseStartTime = Date.now();
     const source = await shapefile.open(shpPath, dbfPath);
     const loadedEntries: CensusBoundaryEntry[] = [];
     while (true) {
@@ -221,20 +228,29 @@ export class CensusBoundaryService {
         populationDensityPerSqKm: null,
       });
     }
+    const parseDurationMs = Date.now() - parseStartTime;
+    this.logger.log(`[CensusBoundaryService] Parsed ${loadedEntries.length.toLocaleString()} entries in ${parseDurationMs}ms`);
+
     this.entries = loadedEntries;
+    const populationStartTime = Date.now();
     await this.loadPopulationAttributes();
+    const populationDurationMs = Date.now() - populationStartTime;
+    this.logger.log(`[CensusBoundaryService] Population attributes loaded in ${populationDurationMs}ms`);
+
     this.computePopulationDensityScale();
     this.loaded = true;
-    this.logger.log(`Loaded ${loadedEntries.length.toLocaleString()} census boundaries for lookup.`);
+    const totalDurationMs = Date.now() - startTime;
+    this.logger.log(`[CensusBoundaryService] All census boundaries loaded (total: ${totalDurationMs}ms)`);
   }
 
   private async loadPopulationAttributes() {
     const csvPath = await this.resolvePopulationCsvPath();
     if (!csvPath) {
-      this.logger.warn('No census population CSV found; lookup will return boundary-only context.');
+      this.logger.warn('[CensusBoundaryService] No census population CSV found; lookup will return boundary-only context.');
       return;
     }
     const text = await fs.readFile(csvPath, 'utf8');
+    this.logger.debug(`[CensusBoundaryService] Parsing population CSV (${(text.length / 1024).toFixed(1)}KB)`);
     const records = parse(text, {
       columns: true,
       skip_empty_lines: true,
@@ -243,6 +259,7 @@ export class CensusBoundaryService {
       skip_records_with_error: true,
       bom: true,
     }) as Array<Record<string, unknown>>;
+    this.logger.debug(`[CensusBoundaryService] CSV contains ${records.length.toLocaleString()} records`);
     let matchedRows = 0;
     for (const record of records) {
       const dauid = this.pickStringByLooseHeader(record, ['DAUID', 'da uid', 'dissemination area uid']);
@@ -268,6 +285,7 @@ export class CensusBoundaryService {
       if (dguid) this.populationByDguid.set(dguid, payload);
       matchedRows += 1;
     }
+    this.logger.debug(`[CensusBoundaryService] Matched ${matchedRows.toLocaleString()} population records`);
     for (const entry of this.entries) {
       const resolved = this.resolvePopulation(entry);
       if (!resolved) continue;

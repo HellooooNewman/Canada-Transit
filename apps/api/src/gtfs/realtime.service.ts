@@ -94,21 +94,50 @@ export class RealtimeService implements OnModuleInit {
   constructor(private readonly prisma: PrismaService) {}
 
   async onModuleInit() {
+    const startTime = Date.now();
+    this.logger.log('[RealtimeService] Initializing realtime service...');
+
+    const reloadStartTime = Date.now();
     await this.reloadRealtimeConfig();
+    const reloadDurationMs = Date.now() - reloadStartTime;
+    this.logger.log(`[RealtimeService] Realtime config loaded in ${reloadDurationMs}ms`);
+
+    const pollStartTime = Date.now();
     await this.pollRealtimeFeeds();
+    const pollDurationMs = Date.now() - pollStartTime;
+    this.logger.log(`[RealtimeService] Initial realtime feed poll completed in ${pollDurationMs}ms`);
+
+    const totalDurationMs = Date.now() - startTime;
+    this.logger.log(`[RealtimeService] Initialization complete (total: ${totalDurationMs}ms)`);
+    this.initialized = true;
   }
 
   @Interval(20_000)
   async pollRealtimeFeeds() {
-    if (!this.initialized) return;
-    if (this.pollingInFlight) return;
+    if (!this.initialized) {
+      this.logger.debug('[RealtimeService] Polling skipped - service not yet initialized');
+      return;
+    }
+    if (this.pollingInFlight) {
+      this.logger.debug('[RealtimeService] Polling skipped - poll already in flight');
+      return;
+    }
+    const pollStartTime = Date.now();
     this.pollingInFlight = true;
     try {
+      const reloadStartTime = Date.now();
       await this.reloadRealtimeConfigIfChanged();
+      const reloadDurationMs = Date.now() - reloadStartTime;
+
+      const tasksStartTime = Date.now();
       const tasks = [...this.groupStates.entries()].map(async ([groupKey, state]) => {
         await this.pollGroup(groupKey, state);
       });
       await Promise.all(tasks);
+      const tasksDurationMs = Date.now() - tasksStartTime;
+
+      const totalDurationMs = Date.now() - pollStartTime;
+      this.logger.debug(`[RealtimeService] Poll cycle completed (reload: ${reloadDurationMs}ms, polls: ${tasksDurationMs}ms, total: ${totalDurationMs}ms)`);
     } catch (error) {
       this.logger.warn(`Realtime polling cycle failed: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -368,6 +397,7 @@ export class RealtimeService implements OnModuleInit {
   }
 
   private async reloadRealtimeConfig() {
+    const startTime = Date.now();
     const filePath = this.realtimeConfigPath ?? this.resolveRealtimeMapPath();
     this.realtimeConfigPath = filePath;
     const rawText = await readFile(filePath, 'utf8');
@@ -410,9 +440,9 @@ export class RealtimeService implements OnModuleInit {
       }
     }
 
-    this.initialized = true;
+    const durationMs = Date.now() - startTime;
     this.logger.log(
-      `Realtime config loaded from ${filePath}. Agencies=${this.agencyRealtime.size}, endpoint_sets=${this.groupStates.size}`,
+      `[RealtimeService] Realtime config loaded in ${durationMs}ms from ${filePath}. Agencies=${this.agencyRealtime.size}, endpoint_sets=${this.groupStates.size}`,
     );
   }
 
