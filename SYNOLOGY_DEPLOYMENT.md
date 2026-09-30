@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-1. **Docker Hub Account**: Push your built images to Docker Hub
+1. **GitHub Container Registry**: The workflow pushes the images to `ghcr.io/helloooonewman/ttc-api` and `ghcr.io/helloooonewman/ttc-web` with its own `GITHUB_TOKEN`, so no registry secrets are needed
 2. **Synology NAS**: With SSH access enabled
 3. **GitHub Secrets**: Configure these in your repository settings
 
@@ -12,8 +12,6 @@ Add these secrets to your repository (`Settings > Secrets and variables > Action
 
 | Secret | Description |
 |--------|-------------|
-| `DOCKERHUB_USERNAME` | Your Docker Hub username |
-| `DOCKERHUB_TOKEN` | Docker Hub access token (create at https://hub.docker.com/settings/security) |
 | `SYNOLOGY_HOST` | IP or hostname of your Synology NAS |
 | `SYNOLOGY_PORT` | SSH port (usually 22) |
 | `SYNOLOGY_USER` | SSH user (usually `root` or your NAS user) |
@@ -56,17 +54,20 @@ scp -P 22 docker-compose.synology.yml user@synology-ip:/volume1/docker/ttc-viewe
 scp -r prisma/data/* user@synology-ip:/volume1/docker/ttc-viewer/data/
 ```
 
-### 4. Update docker-compose.yml with your Docker Hub username
+### 4. Let the NAS pull the images
 
-On the Synology NAS:
+New GHCR packages start out private. Make `ttc-api` and `ttc-web` public (each package's
+**Package settings → Change visibility**), or log the NAS in once with a
+[personal access token (classic)](https://github.com/settings/tokens) that has only the
+`read:packages` scope:
 
 ```bash
 ssh user@synology-ip
-sudo nano /volume1/docker/ttc-viewer/docker-compose.yml
-
-# Replace "yourusername" with your actual Docker Hub username
-# Save with Ctrl+O, Enter, Ctrl+X
+echo <token> | sudo docker login ghcr.io -u HellooooNewman --password-stdin
 ```
+
+The images used to be on Docker Hub. If the NAS still has the old `docker-compose.yml`, copy the new
+one over (step 2) so `docker compose pull` fetches from GHCR.
 
 ## Deployment Flow
 
@@ -75,7 +76,7 @@ sudo nano /volume1/docker/ttc-viewer/docker-compose.yml
 1. Push to `main` branch
 2. GitHub Actions automatically:
    - Builds API and Web images
-   - Pushes images to Docker Hub
+   - Pushes images to the GitHub Container Registry
    - SSHes into Synology
    - Pulls latest images
    - Restarts containers with `docker compose up -d`
@@ -104,9 +105,9 @@ In `docker-compose.yml`, change the image tag:
 
 ```yaml
 api:
-  image: yourusername/ttc-api:1.0.4  # Previous working version
+  image: ghcr.io/helloooonewman/ttc-api:<commit sha>  # Previous working version
 web:
-  image: yourusername/ttc-web:1.0.4
+  image: ghcr.io/helloooonewman/ttc-web:<commit sha>
 ```
 
 Then redeploy:
